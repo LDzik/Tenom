@@ -1,0 +1,33 @@
+{
+  "server": {
+    "port": 8080
+  },
+  "database": {
+    "path": "./data/tenom.db",
+    "retention_days": 7
+  },
+  "probe": {
+    "interval_seconds": 15,
+    "packet_count": 3,
+    "timeout_seconds": 3,
+    "jitter_threshold_ms": 120.0,
+    "loss_threshold_pct": 10.0
+  },
+  "targets": [
+    {
+      "name": "Local Gateway",
+      "host": "192.168.10.1",
+      "category": "LAN"
+    },
+    {
+      "name": "Cloudflare DNS",
+      "host": "1.1.1.1",
+      "category": "Public Anycast"
+    },
+    {
+      "name": "Google DNS",
+      "host": "8.8.8.8",
+      "category": "Public Anycast"
+    }
+  ]
+}
