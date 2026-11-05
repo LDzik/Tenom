@@ -10,6 +10,7 @@ import(
 	"time"
 
 	"github.com/LDzik/Tenom/internal/config"
+	"github.com/LDzik/Tenom/internal/storage"
 )
 
 func main() {
@@ -23,23 +24,40 @@ func main() {
 		log.Fatalf("[Tenom] Error loading confuguration: %v", err)
 	}
 
-	log.Printf("[Tenom] Loaded %d target(s) from %s", len(cfg.Targets), *configPath)
-	for _, target := range cfg.Targets {
-		log.Printf(" -> Target: %-16s | Host: %-15s | Category: %s", target.Name, target.Host, target.Category)
+	log.Printf("[Tenom] Initializing storage at %s...", cfg.Database.Path)
+	db, err := storage.New(cfg.Database.Path)
+	if err != nil {
+		log.Fatalf("[Tenom] Storage initialization failed: %v", err)
 	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Printf("[Tenom] Error closing database: %v", err)
+		} else {
+			log.Println("[Tenom] Database closed cleanly.")
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	db.StartPruningWorker(ctx, cfg.Database.RetentionDays)
+
+	err = db.InsertPingSample(storage.PingSample{
+		Target:     "1.1.1.1",
+		Category:   "Public Anycast",
+		RttMs:      12.45,
+		PacketLoss: 0.0,
+		Timestamp:  time.Now(),
+	})
+	if err != nil {
+		log.Printf("[Tenom] Warning: Sample write test failed: %v", err)
+	} else {
+		log.Println("[Tenom] Sample write test succeeded.")
+	}
+
+
 	log.Printf("[Tenom] Core initialized. Awaiting shutdown signal or engine hook...")
 
 	<-ctx.Done()
-
-	log.Println("[Tenom] Shutdown signal received. Performing cleanup...")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
-	defer cancel()
-
-	<-shutdownCtx.Done()
-	log.Println("[Tenom] Procss exited cleanly.")
+	log.Println("[Tenom] Shutdown signal received.")
 }

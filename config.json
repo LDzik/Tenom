@@ -1,6 +1,6 @@
 {
   "server": {
-    "port": 8080
+    "port": 7366
   },
   "database": {
     "path": "./data/tenom.db",
