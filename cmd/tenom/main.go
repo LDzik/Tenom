@@ -6,14 +6,17 @@ import(
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/LDzik/Tenom/internal/config"
+	"github.com/LDzik/Tenom/internal/probe"
 	"github.com/LDzik/Tenom/internal/storage"
 )
 
 func main() {
+	// config
 	configPath := flag.String("config", "config.json", "Path to configuration file")
 	flag.Parse()
 
@@ -24,7 +27,7 @@ func main() {
 		log.Fatalf("[Tenom] Error loading confuguration: %v", err)
 	}
 
-	log.Printf("[Tenom] Initializing storage at %s...", cfg.Database.Path)
+	// db
 	db, err := storage.New(cfg.Database.Path)
 	if err != nil {
 		log.Fatalf("[Tenom] Storage initialization failed: %v", err)
@@ -37,27 +40,42 @@ func main() {
 		}
 	}()
 
+	// ctx
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// db maintenance
 	db.StartPruningWorker(ctx, cfg.Database.RetentionDays)
 
-	err = db.InsertPingSample(storage.PingSample{
-		Target:     "1.1.1.1",
-		Category:   "Public Anycast",
-		RttMs:      12.45,
-		PacketLoss: 0.0,
-		Timestamp:  time.Now(),
-	})
-	if err != nil {
-		log.Printf("[Tenom] Warning: Sample write test failed: %v", err)
-	} else {
-		log.Println("[Tenom] Sample write test succeeded.")
-	}
+	//
+	sampleChan := make(chan storage.PingSample, 128)
+	var wg sync.WaitGroup
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for sample := range sampleChan {
+			if err := db.InsertPingSample(sample); err != nil {
+				log.Printf("[Storage] Failed to persist ping sample: %v", err)
+			}
+		}
+		log.Println("[Storage] Ingestion worker drained and stopped.")
+	}()
+	
+	probeEngine := probe.NewEngine(cfg.Probe, cfg.Targets, sampleChan)
+	probeEngine.Start(ctx, &wg)
 
-	log.Printf("[Tenom] Core initialized. Awaiting shutdown signal or engine hook...")
+	log.Printf("[Tenom] Engine running. Monitoring %d targets every %ds. Press Ctrl+C to stop.", len(cfg.Targets), cfg.Probe.IntervalSeconds)
 
+	// 
 	<-ctx.Done()
-	log.Println("[Tenom] Shutdown signal received.")
+	log.Println("[Tenom] Termination signal received. Stopping probes...")
+	
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		close(sampleChan)
+	}()
+
+	wg.Wait()
+	log.Println("[Tenom] Shutdown complete.")
 }
