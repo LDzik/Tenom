@@ -61,6 +61,15 @@ func (s *Storage) migrate() error {
 		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS dns_samples (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		server TEXT NOT NULL,
+		domain TEXT NOT NULL,
+		latency_ms REAL NOT NULL,
+		status TEXT NOT NULL,
+		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
 	CREATE TABLE IF NOT EXISTS incidents (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		started_at DATETIME NOT NULL,
@@ -71,6 +80,7 @@ func (s *Storage) migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_ping_samples_ts ON ping_samples(target, timestamp);
+	CREATE INDEX IF NOT EXISTS idx_dns_samples_ts ON dns_samples(server, timestamp);
 	CREATE INDEX IF NOT EXISTS idx_incidents_target ON incidents(target, started_at);
 	`
 	_, err := s.db.Exec(query)
@@ -86,8 +96,21 @@ func (s *Storage) InsertPingSample(sample PingSample) error {
 	return err
 }
 
+func (s *Storage) InsertDNSSample(sample DNSSample) error {
+	query := `
+	INSERT INTO dns_samples (server, domain, latency_ms, status, timestamp)
+	VALUES (?, ?, ?, ?, COALESCE(NULLIF(?, '0001-01-01 00:00:00+00:00'), CURRENT_TIMESTAMP))
+	`
+	_, err := s.db.Exec(query, sample.Server, sample.Domain, sample.LatencyMs, sample.Status, sample.Timestamp)
+	return err
+}
+
 func (s *Storage) PruneOldSamples(retentionDays int) (int64, error) {
-	query := `DELETE FROM ping_samples WHERE timestamp < datetime('now', printf('-%d days', ?))`
+	query := `
+	DELETE FROM ping_samples WHERE timestamp < datetime('now', printf('-%d days', ?))
+	DELETE FROM dns_samples WHERE timestamp < datetime('now', printf('-%d days', ?));
+	`
+	
 	res, err := s.db.Exec(query, retentionDays)
 	if err != nil {
 		return 0, err

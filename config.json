@@ -13,6 +13,30 @@
     "jitter_threshold_ms": 120.0,
     "loss_threshold_pct": 10.0
   },
+  "dns": {
+    "enabled": true,
+    "interval_seconds": 30,
+    "timeout_seconds": 3,
+    "domain": "google.com",
+    "servers": [
+      {
+        "name": "Local Gateway",
+        "host": "192.168.1.1:53"
+      },
+      {
+        "name": "Cloudflare DNS",
+        "host": "1.1.1.1:53"
+      },
+      {
+        "name": "Google DNS",
+        "host": "8.8.8.8:53"
+      },
+      {
+        "name": "Quad9 DNS",
+        "host": "9.9.9.9:53"
+      }
+    ]
+  },
   "targets": [
     {
       "name": "Local Gateway",

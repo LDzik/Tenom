@@ -47,33 +47,56 @@ func main() {
 	// db maintenance
 	db.StartPruningWorker(ctx, cfg.Database.RetentionDays)
 
-	//
-	sampleChan := make(chan storage.PingSample, 128)
+	// probe + dns
+	pingChan := make(chan storage.PingSample, 128)
+	dnsChan := make(chan storage.DNSSample, 64)
+
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for sample := range sampleChan {
-			if err := db.InsertPingSample(sample); err != nil {
-				log.Printf("[Storage] Failed to persist ping sample: %v", err)
+		for pingChan != nil || dnsChan != nil {
+			select {
+			case sample, ok := <-pingChan:
+				if !ok {
+					pingChan = nil
+					continue
+				}
+				if err := db.InsertPingSample(sample); err != nil {
+					log.Printf("[Storage] Failed to persist ping sample: %v", err)
+				}
+			case sample, ok := <-dnsChan:
+				if !ok {
+					dnsChan = nil
+					continue
+				}
+				if err := db.InsertDNSSample(sample); err != nil {
+					log.Printf("[Storage] Failed to persist DNS sample: %v", err)
+				}
 			}
 		}
-		log.Println("[Storage] Ingestion worker drained and stopped.")
+		log.Println("[Storage] All ingestion streams drained and closed.")
 	}()
-	
-	probeEngine := probe.NewEngine(cfg.Probe, cfg.Targets, sampleChan)
+
+	probeEngine := probe.NewEngine(cfg.Probe, cfg.Targets, pingChan)
 	probeEngine.Start(ctx, &wg)
 
-	log.Printf("[Tenom] Engine running. Monitoring %d targets every %ds. Press Ctrl+C to stop.", len(cfg.Targets), cfg.Probe.IntervalSeconds)
+	dnsEngine := probe.NewDNSEngine(cfg.DNS, dnsChan)
+	dnsEngine.Start(ctx, &wg)
+
+	log.Printf("[Tenom] Running. Monitoring %d ping target(s) and %d DNS server(s). Press Ctrl+C to stop.",
+		len(cfg.Targets), len(cfg.DNS.Servers))
+
 
 	// 
 	<-ctx.Done()
-	log.Println("[Tenom] Termination signal received. Stopping probes...")
+	log.Println("[Tenom] Termination signal received. Stopping workers...")
 	
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		close(sampleChan)
+		close(pingChan)
+		close(dnsChan)
 	}()
 
 	wg.Wait()

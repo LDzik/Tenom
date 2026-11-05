@@ -20,6 +20,19 @@ type ProbeConfig struct {
 	LossThresholdPct  float64 `json:"loss_threshold_pct"`
 }
 
+type DNSServer struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+}
+
+type DNSConfig struct {
+	Enabled         bool        `json:"enabled"`
+	IntervalSeconds int         `json:"interval_seconds"`
+	TimeoutSeconds  int         `json:"timeout_seconds"`
+	Domain          string      `json:"domain"`
+	Servers         []DNSServer `json:"servers"`
+}
+
 type DatabaseConfig struct {
 	Path          string `json:"path"`
 	RetentionDays int    `json:"retention_days"`
@@ -33,6 +46,7 @@ type Config struct {
 	Server   ServerConfig   `json:"server"`
 	Database DatabaseConfig `json:"database"`
 	Probe    ProbeConfig    `json:"probe"`
+	DNS      DNSConfig      `json:"dns"`
 	Targets  []Target       `json:"targets"`
 }
 

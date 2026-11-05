@@ -10,6 +10,16 @@ type PingSample struct{
 	PacketLoss	float64		`json:"packet_loss"`
 	Timestamp	time.Time	`json:"timestamp"`
 }
+
+type DNSSample struct {
+	ID			int64     `json:"id"`
+	Server		string    `json:"server"`
+	Domain		string    `json:"domain"`
+	LatencyMs	float64   `json:"latency_ms"`
+	Status		string    `json:"status"`
+	Timestamp	time.Time `json:"timestamp"`
+}
+
 type Incident struct {
 	ID					int64		`json:"id"`
 	StartedAt        	time.Time	`json:"started_at"`
