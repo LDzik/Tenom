@@ -29,11 +29,11 @@ func NewEngine(cfg config.ProbeConfig, targets []config.Target, sampleChan chan<
 func (e *Engine) Start(ctx context.Context, wg *sync.WaitGroup) {
 	for _, target := range e.targets {
 		wg.Add(1)
-		go e.RunTargetWorker(ctx, wg, target)
+		go e.runTargetWorker(ctx, wg, target)
 	}
 }
 
-func (e *Engine) RunTargetWorker(ctx context.Context, wg *sync.WaitGroup, target config.Target){
+func (e *Engine) runTargetWorker(ctx context.Context, wg *sync.WaitGroup, target config.Target){
 	defer wg.Done()
 
 	ticker := time.NewTicker(time.Duration(e.cfg.IntervalSeconds) * time.Second)
@@ -41,7 +41,7 @@ func (e *Engine) RunTargetWorker(ctx context.Context, wg *sync.WaitGroup, target
 
 	log.Printf("[Probe] Worker started for %s (%s)", target.Name, target.Host)
 
-	e.ExecutePing(target)
+	e.executePing(target)
 
 	for {
 		select {
@@ -49,13 +49,13 @@ func (e *Engine) RunTargetWorker(ctx context.Context, wg *sync.WaitGroup, target
 			log.Printf("[Probe] Worker stopping for %s", target.Name)
 			return
 		case <-ticker.C:
-			e.ExecutePing(target)
+			e.executePing(target)
 		}
 	}
 }
 
 
-func (e *Engine) ExecutePing(target config.Target) {
+func (e *Engine) executePing(target config.Target) {
 	pinger, err := probing.NewPinger(target.Host)
 	if err != nil {
 		log.Printf("[Probe] [%s] Failed to resolve target host: %v", target.Name, err)

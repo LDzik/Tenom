@@ -31,16 +31,16 @@ func (d *DNSEngine) Start(ctx context.Context, wg *sync.WaitGroup) {
 	}
 
 	wg.Add(1)
-	go d.RunWorker(ctx, wg)
+	go d.runWorker(ctx, wg)
 }
 
-func (d *DNSEngine) RunWorker(ctx context.Context, wg *sync.WaitGroup) {
+func (d *DNSEngine) runWorker(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	log.Printf("[DNS] Engine started. Benchmarking %d server(s) every %ds (resolving %s)",
 		len(d.cfg.Servers), d.cfg.IntervalSeconds, d.cfg.Domain)
 
-	d.ExecuteBenchmark(ctx)
+	d.executeBenchmark(ctx)
 
 	ticker := time.NewTicker(time.Duration(d.cfg.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
@@ -51,26 +51,26 @@ func (d *DNSEngine) RunWorker(ctx context.Context, wg *sync.WaitGroup) {
 			log.Println("[DNS] Benchmark engine stopping...")
 			return
 		case <-ticker.C:
-			d.ExecuteBenchmark(ctx)
+			d.executeBenchmark(ctx)
 		}
 	}
 }
 
-func (d *DNSEngine) ExecuteBenchmark(ctx context.Context) {
+func (d *DNSEngine) executeBenchmark(ctx context.Context) {
 	var benchmarkWg sync.WaitGroup
 
 	for _, srv := range d.cfg.Servers {
 		benchmarkWg.Add(1)
 		go func(server config.DNSServer) {
 			defer benchmarkWg.Done()
-			d.QueryServer(ctx, server)
+			d.queryServer(ctx, server)
 		}(srv)
 	}
 
 	benchmarkWg.Wait()
 }
 
-func (d *DNSEngine) QueryServer(ctx context.Context, server config.DNSServer) {
+func (d *DNSEngine) queryServer(ctx context.Context, server config.DNSServer) {
 	targetAddr := server.Host
 	if !strings.Contains(targetAddr, ":") {
 		targetAddr = net.JoinHostPort(targetAddr, "53")
