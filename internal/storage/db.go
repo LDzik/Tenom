@@ -105,6 +105,15 @@ func (s *Storage) InsertDNSSample(sample DNSSample) error {
 	return err
 }
 
+func (s *Storage) InsertIncident(inc Incident) error {
+	query := `
+	INSERT INTO incidents (started_at, resolved_at, target, trigger_reason, traceroute_output)
+	VALUES (?, ?, ?, ?, ?)
+	`
+	_, err := s.db.Exec(query, inc.StartedAt, inc.ResolvedAt, inc.Target, inc.TriggerReason, inc.TracerouteOutput)
+	return err
+}
+
 func (s *Storage) PruneOldSamples(retentionDays int) (int64, error) {
 	query := `
 	DELETE FROM ping_samples WHERE timestamp < datetime('now', printf('-%d days', ?))

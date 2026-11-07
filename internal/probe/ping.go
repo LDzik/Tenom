@@ -3,6 +3,7 @@ package probe
 import(
 	"context"
 	"log"
+	"fmt"
 	"sync"
 	"time"
 
@@ -10,19 +11,22 @@ import(
 
 	"github.com/LDzik/Tenom/internal/config"
 	"github.com/LDzik/Tenom/internal/storage"
+	"github.com/LDzik/Tenom/internal/traceroute"
 )
 
 type Engine struct {
 	cfg			config.ProbeConfig
 	targets		[]config.Target
 	sampleChan	chan<- storage.PingSample
+	traceEngine	*traceroute.Engine
 }
 
-func NewEngine(cfg config.ProbeConfig, targets []config.Target, sampleChan chan<- storage.PingSample) *Engine{
+func NewEngine(cfg config.ProbeConfig, targets []config.Target, sampleChan chan<- storage.PingSample, traceEngine *traceroute.Engine) *Engine{
 	return &Engine{
-		cfg:		cfg,
-		targets: 	targets,
-		sampleChan: sampleChan,
+		cfg:			cfg,
+		targets: 		targets,
+		sampleChan: 	sampleChan,
+		traceEngine:	traceEngine,
 	}
 }
 
@@ -89,6 +93,16 @@ func (e *Engine) executePing(target config.Target) {
 	case e.sampleChan <- sample:
 	default:
 		log.Printf("[Probe] Warning: sample buffer full, dropping metric for %s", target.Name)
+	}
+
+	if target.Category != "LAN" && e.traceEngine != nil {
+		if sample.PacketLoss >= e.cfg.LossThresholdPct {
+			reason := fmt.Sprintf("Packet loss %.1f%% >= threshold %.1f%%", sample.PacketLoss, e.cfg.LossThresholdPct)
+			e.traceEngine.Trigger(target.Host, reason)
+		} else if e.cfg.JitterThresholdMs > 0 && sample.RttMs >= e.cfg.JitterThresholdMs {
+			reason := fmt.Sprintf("RTT %.2fms >= threshold %.2fms", sample.RttMs, e.cfg.JitterThresholdMs)
+			e.traceEngine.Trigger(target.Host, reason)
+		}
 	}
 }
 

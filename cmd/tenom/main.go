@@ -13,6 +13,7 @@ import(
 	"github.com/LDzik/Tenom/internal/config"
 	"github.com/LDzik/Tenom/internal/probe"
 	"github.com/LDzik/Tenom/internal/storage"
+	"github.com/LDzik/Tenom/internal/traceroute"
 )
 
 func main() {
@@ -47,16 +48,17 @@ func main() {
 	// db maintenance
 	db.StartPruningWorker(ctx, cfg.Database.RetentionDays)
 
-	// probe + dns
+	// channels
 	pingChan := make(chan storage.PingSample, 128)
 	dnsChan := make(chan storage.DNSSample, 64)
+	incidentChan := make(chan storage.Incident, 16)
 
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for pingChan != nil || dnsChan != nil {
+		for pingChan != nil || dnsChan != nil || incidentChan != nil {
 			select {
 			case sample, ok := <-pingChan:
 				if !ok {
@@ -74,12 +76,24 @@ func main() {
 				if err := db.InsertDNSSample(sample); err != nil {
 					log.Printf("[Storage] Failed to persist DNS sample: %v", err)
 				}
+			case incident, ok := <-incidentChan:
+				if !ok {
+					incidentChan = nil
+					continue
+				}
+				if err := db.InsertIncident(incident); err != nil {
+					log.Printf("[Storage] Failed to record incident: %v", err)
+				} else {
+					log.Printf("[Storage] Incident recorded for %s in database.", incident.Target)
+				}
 			}
 		}
 		log.Println("[Storage] All ingestion streams drained and closed.")
 	}()
 
-	probeEngine := probe.NewEngine(cfg.Probe, cfg.Targets, pingChan)
+	traceEngine := traceroute.NewEngine(3 * time.Minute, incidentChan)
+
+	probeEngine := probe.NewEngine(cfg.Probe, cfg.Targets, pingChan, traceEngine)
 	probeEngine.Start(ctx, &wg)
 
 	dnsEngine := probe.NewDNSEngine(cfg.DNS, dnsChan)
@@ -97,6 +111,7 @@ func main() {
 		time.Sleep(500 * time.Millisecond)
 		close(pingChan)
 		close(dnsChan)
+		close(incidentChan)
 	}()
 
 	wg.Wait()
