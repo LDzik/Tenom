@@ -10,8 +10,8 @@
     "interval_seconds": 15,
     "packet_count": 3,
     "timeout_seconds": 3,
-    "jitter_threshold_ms": 120.0,
-    "loss_threshold_pct": 10.0
+    "jitter_threshold_ms": 120,
+    "loss_threshold_pct": 10
   },
   "dns": {
     "enabled": true,
@@ -52,6 +52,16 @@
       "name": "Google DNS",
       "host": "8.8.8.8",
       "category": "Public Anycast"
+    },
+    {
+      "name": "EfT Web",
+      "host": "104.18.7.148",
+      "category": "Game Relay"
+    },
+    {
+      "name": "Server",
+      "host": "192.168.10.111",
+      "category": "LAN"
     }
   ]
 }

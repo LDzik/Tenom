@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tenom | Network Reliability Monitor</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2310b981' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3C/svg%3E">
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <!-- Apache ECharts 6.1.0 -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Top Header -->
+    <header class="header">
+      <div class="header-brand">
+        <div class="logo-radar">
+          <span class="radar-ping"></span>
+          <svg class="radar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.3"></circle>
+            <circle cx="12" cy="12" r="6" stroke-opacity="0.6"></circle>
+            <circle cx="12" cy="12" r="2"></circle>
+            <path d="M12 12L19 5" stroke-opacity="0.9"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <div class="brand-title">
+            <span class="brand-name">TENOM</span>
+            <span class="brand-badge">NOC</span>
+          </div>
+          <span class="brand-subtitle">Autonomous Network Reliability Daemon</span>
+        </div>
+      </div>
+
+      <div class="header-meta">
+        <!-- Live System Status Badge -->
+        <div id="system-status-badge" class="status-badge status-operational" title="Live state of network probe targets">
+          <span class="status-dot"></span>
+          <span id="system-status-text" class="status-label">OPERATIONAL</span>
+        </div>
+
+        <!-- Polling & Refresh Indicators -->
+        <div class="header-controls">
+          <div class="polling-chip" title="Continuous background polling">
+            <span class="pulse-indicator"></span>
+            <span class="polling-text">Live 5s</span>
+          </div>
+          <div class="refresh-indicator" id="last-updated-text" title="Last successful sync time">
+            Updated --:--:--
+          </div>
+          <button id="btn-refresh" class="btn-icon" title="Force Refresh Metrics" aria-label="Refresh metrics">
+            <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"></path>
+            </svg>
+          </button>
+          <!-- Settings Drawer Button -->
+          <button id="btn-settings" class="btn-icon btn-settings" title="Configure Targets &amp; Probe Thresholds" aria-label="Open settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Dashboard Tab Navigation -->
+    <nav class="main-tabs-bar" role="tablist" aria-label="Dashboard Sections">
+      <div class="main-tabs-container">
+        <button class="main-tab-btn active" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-pane-overview">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"></rect>
+            <rect x="14" y="3" width="7" height="7"></rect>
+            <rect x="14" y="14" width="7" height="7"></rect>
+            <rect x="3" y="14" width="7" height="7"></rect>
+          </svg>
+          <span>Overview &amp; Metrics</span>
+        </button>
+        <button class="main-tab-btn" data-tab="targets" role="tab" aria-selected="false" aria-controls="tab-pane-targets">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <circle cx="12" cy="12" r="6"></circle>
+            <circle cx="12" cy="12" r="2"></circle>
+          </svg>
+          <span>Targets</span>
+          <span id="tab-targets-count" class="tab-counter-badge">0</span>
+        </button>
+        <button class="main-tab-btn" data-tab="incidents" role="tab" aria-selected="false" aria-controls="tab-pane-incidents">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 2 22 22 22"></polygon>
+            <line x1="12" y1="9" x2="12" y2="13"></line>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+          <span>Incidents &amp; Diagnostics</span>
+          <span id="tab-incidents-count" class="tab-counter-badge">0</span>
+        </button>
+      </div>
+    </nav>
+
+    <!-- Main Dashboard Container -->
+    <main class="dashboard-content">
+      <!-- Tab 1: Overview & Metrics -->
+      <div id="tab-pane-overview" class="main-tab-pane active" role="tabpanel">
+        <!-- Outage Banner (shown when outage is active) -->
+        <section id="outage-alert-banner" class="outage-banner hidden">
+        <div class="outage-banner-content">
+          <div class="outage-pulse-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="12 2 2 22 22 22"></polygon>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </div>
+          <div class="outage-info">
+            <h4 class="outage-title">Network Outage In Progress</h4>
+            <p class="outage-desc">Automatic traceroute diagnostics triggered. Multiple probe targets unreachable.</p>
+          </div>
+          <div class="outage-timer">
+            <span class="timer-label">Outage Duration:</span>
+            <span id="outage-duration-counter" class="timer-value mono">0s</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- KPI Overview Cards Grid -->
+      <section class="overview-grid">
+        <!-- Card 1: System Status -->
+        <div class="kpi-card card-status">
+          <div class="kpi-header">
+            <span class="kpi-title">SYSTEM STATE</span>
+            <div class="kpi-icon icon-shield">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              </svg>
+            </div>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-value-row">
+              <span id="kpi-state-val" class="kpi-value status-text-green">OPERATIONAL</span>
+            </div>
+            <div class="kpi-meta">
+              <span id="kpi-state-desc" class="kpi-subtext">All probe targets reachable</span>
+            </div>
+          </div>
+          <div class="card-accent-bar" id="kpi-state-bar"></div>
+        </div>
+
+        <!-- Card 2: 24h Uptime Counter -->
+        <div class="kpi-card card-uptime">
+          <div class="kpi-header">
+            <span class="kpi-title">24H UPTIME SLA</span>
+            <div class="kpi-icon icon-uptime">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+            </div>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-value-row">
+              <span id="kpi-uptime-val" class="kpi-value mono text-emerald">99.95<small class="kpi-unit">%</small></span>
+            </div>
+            <div class="sla-progress-track">
+              <div id="sla-progress-bar" class="sla-progress-fill" style="width: 99.95%;"></div>
+            </div>
+            <div class="kpi-meta">
+              <span id="kpi-uptime-desc" class="kpi-subtext">Rolling 24-hour evaluation</span>
+            </div>
+          </div>
+          <div class="card-accent-bar accent-emerald"></div>
+        </div>
+
+        <!-- Card 3: Gateway RTT -->
+        <div class="kpi-card card-gateway">
+          <div class="kpi-header">
+            <span class="kpi-title">GATEWAY RTT (LAN)</span>
+            <div class="kpi-icon icon-gateway">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                <line x1="6" y1="18" x2="6.01" y2="18"></line>
+              </svg>
+            </div>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-value-row">
+              <span id="kpi-gateway-val" class="kpi-value mono">-- <small class="kpi-unit">ms</small></span>
+              <span id="kpi-gateway-loss" class="badge-pill badge-green mono">0.0% loss</span>
+            </div>
+            <div class="kpi-meta">
+              <span id="kpi-gateway-host" class="kpi-subtext mono">Target: Gateway</span>
+            </div>
+          </div>
+          <div class="card-accent-bar accent-cyan"></div>
+        </div>
+
+        <!-- Card 4: WAN / Cloudflare RTT -->
+        <div class="kpi-card card-wan">
+          <div class="kpi-header">
+            <span class="kpi-title">ISP / WAN RTT</span>
+            <div class="kpi-icon icon-globe">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+            </div>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-value-row">
+              <span id="kpi-wan-val" class="kpi-value mono">-- <small class="kpi-unit">ms</small></span>
+              <span id="kpi-wan-loss" class="badge-pill badge-green mono">0.0% loss</span>
+            </div>
+            <div class="kpi-meta">
+              <span id="kpi-wan-host" class="kpi-subtext mono">Target: 1.1.1.1 (Cloudflare)</span>
+            </div>
+          </div>
+          <div class="card-accent-bar accent-purple"></div>
+        </div>
+
+        <!-- Card 5: DNS Average Lookup -->
+        <div class="kpi-card card-dns">
+          <div class="kpi-header">
+            <span class="kpi-title">DNS RESOLUTION</span>
+            <div class="kpi-icon icon-dns">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M16.2 7.8l-2 6.3-6.4 2 2-6.3z"></path>
+              </svg>
+            </div>
+          </div>
+          <div class="kpi-body">
+            <div class="kpi-value-row">
+              <span id="kpi-dns-val" class="kpi-value mono">-- <small class="kpi-unit">ms</small></span>
+              <span id="kpi-dns-fastest" class="badge-pill badge-blue">Fastest</span>
+            </div>
+            <div class="kpi-meta">
+              <span id="kpi-dns-desc" class="kpi-subtext">Avg latency (google.com)</span>
+            </div>
+          </div>
+          <div class="card-accent-bar accent-amber"></div>
+        </div>
+      </section>
+
+      <!-- Charts Section (Apache ECharts 6.1.0) -->
+      <section class="charts-section">
+        <!-- Main Ping Chart Card -->
+        <div class="chart-panel panel-ping">
+          <div class="chart-panel-header">
+            <div class="chart-panel-title-group">
+              <div class="title-with-dot">
+                <span class="panel-dot ping-dot"></span>
+                <h3 class="panel-title">Ping Latency &amp; Packet Loss</h3>
+              </div>
+              <p class="panel-description">Continuous round-trip time (RTT) and packet drop time-series</p>
+            </div>
+            
+            <div class="chart-panel-actions">
+              <!-- Target Filter / Toggle Selector for 5-20+ targets -->
+              <div class="target-filter-wrap" title="Filter series to an individual host or view all">
+                <label for="ping-target-select" class="filter-label">Filter:</label>
+                <select id="ping-target-select" class="select-control mono">
+                  <option value="all">All Targets</option>
+                </select>
+              </div>
+
+              <!-- Metric Toggle -->
+              <div class="chart-view-toggle">
+                <button class="toggle-btn active" data-metric="rtt">Latency</button>
+                <button class="toggle-btn" data-metric="loss">Loss %</button>
+                <button class="toggle-btn" data-metric="both">Dual View</button>
+              </div>
+
+              <!-- Time Range Selector -->
+              <div class="segmented-control" id="ping-range-picker">
+                <button class="seg-btn active" data-range="1h">1h</button>
+                <button class="seg-btn" data-range="24h">24h</button>
+                <button class="seg-btn" data-range="7d">7d</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="chart-container-wrap">
+            <div id="chart-ping" class="echarts-box"></div>
+            <div id="chart-ping-empty" class="chart-empty-state hidden">
+              <span class="empty-icon">📊</span>
+              <span>No ping metric samples collected yet for this time window.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- DNS Benchmark Chart Card -->
+        <div class="chart-panel panel-dns">
+          <div class="chart-panel-header">
+            <div class="chart-panel-title-group">
+              <div class="title-with-dot">
+                <span class="panel-dot dns-dot"></span>
+                <h3 class="panel-title">DNS Resolver Benchmark</h3>
+              </div>
+              <p class="panel-description">Comparative resolution latency across configured nameservers</p>
+            </div>
+            
+            <div class="chart-panel-actions">
+              <!-- View Mode Toggle -->
+              <div class="chart-view-toggle" id="dns-view-toggle">
+                <button class="toggle-btn active" data-mode="timeline">Timeline</button>
+                <button class="toggle-btn" data-mode="bar">Benchmark</button>
+              </div>
+
+              <!-- Range Selector -->
+              <div class="segmented-control" id="dns-range-picker">
+                <button class="seg-btn active" data-range="1h">1h</button>
+                <button class="seg-btn" data-range="24h">24h</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="chart-container-wrap">
+            <div id="chart-dns" class="echarts-box"></div>
+            <div id="chart-dns-empty" class="chart-empty-state hidden">
+              <span class="empty-icon">🌐</span>
+              <span>No DNS benchmark metrics recorded yet for this time window.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+      </div>
+
+      <!-- Tab 2: Targets -->
+      <div id="tab-pane-targets" class="main-tab-pane" role="tabpanel">
+        <section class="targets-section">
+          <div class="section-subhead">
+            <span class="subhead-title">MONITORED PROBE TARGETS</span>
+            <span id="targets-count" class="badge-subtle">0 targets</span>
+          </div>
+          <div id="targets-container" class="targets-grid">
+            <!-- Populated dynamically via app.js -->
+            <div class="target-card target-skeleton">
+              <div class="skeleton-line" style="width: 40%;"></div>
+              <div class="skeleton-line" style="width: 70%; height: 24px;"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Tab 3: Incidents & Diagnostics -->
+      <div id="tab-pane-incidents" class="main-tab-pane" role="tabpanel">
+        <section class="incidents-section">
+          <div class="incidents-panel">
+            <div class="incidents-panel-header">
+              <div class="incidents-title-group">
+                <div class="title-with-dot">
+                  <span class="panel-dot incident-dot"></span>
+                  <h3 class="panel-title">Incident &amp; Outage Diagnostic Log</h3>
+                </div>
+                <p class="panel-description">Automated traceroute snapshots and SLA outage logs triggered during connectivity degradation</p>
+              </div>
+
+              <div class="incidents-panel-controls">
+                <div class="search-input-wrap">
+                  <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg>
+                  <input type="text" id="incident-filter-input" placeholder="Filter by target or reason..." autocomplete="off">
+                </div>
+                <span id="incident-badge-count" class="badge-pill badge-neutral mono">0 Events</span>
+              </div>
+            </div>
+
+            <!-- Incidents Table -->
+            <div class="table-responsive">
+              <table class="data-table" id="table-incidents">
+                <thead>
+                  <tr>
+                    <th style="width: 130px;">Status</th>
+                    <th style="width: 190px;">Timestamp</th>
+                    <th style="width: 170px;">Target</th>
+                    <th>Trigger Reason &amp; Root Cause</th>
+                    <th style="width: 140px;">Duration</th>
+                    <th style="width: 160px; text-align: right;">Diagnostics</th>
+                  </tr>
+                </thead>
+                <tbody id="incidents-tbody">
+                  <tr class="table-loading-row">
+                    <td colspan="6" class="text-center">Loading incident telemetry...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Empty State -->
+            <div id="incidents-empty-state" class="empty-state hidden">
+              <div class="empty-state-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                  <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+              </div>
+              <h4 class="empty-state-title">No Network Incidents Recorded</h4>
+              <p class="empty-state-desc">All monitored probe targets are within latency and packet loss thresholds.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="footer-left">
+        <span class="footer-brand">Tenom Automated Network Monitor</span>
+        <span class="footer-sep">•</span>
+        <span class="footer-meta">Port 7366</span>
+        <span class="footer-sep">•</span>
+        <span class="footer-meta">Go Chi v5 + ECharts 6.1.0</span>
+      </div>
+      <div class="footer-right">
+        <span class="footer-status-pill">
+          <span class="live-blink"></span> Probing Daemon Active
+        </span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Traceroute Terminal Modal -->
+  <div id="traceroute-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-traceroute-title">
+    <div class="modal-dialog">
+      <div class="terminal-window">
+        <!-- Terminal Header with macOS-style controls -->
+        <div class="terminal-header">
+          <div class="terminal-dots">
+            <button class="dot dot-close" id="btn-modal-close" title="Close" aria-label="Close modal"></button>
+            <span class="dot dot-min"></span>
+            <span class="dot dot-max"></span>
+          </div>
+          <div class="terminal-title" id="modal-traceroute-title">
+            <svg class="terminal-cmd-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="4 17 10 11 4 5"></polyline>
+              <line x1="12" y1="19" x2="20" y2="19"></line>
+            </svg>
+            <span id="modal-traceroute-command" class="mono">traceroute -n target</span>
+          </div>
+          <div class="terminal-actions">
+            <button id="btn-copy-traceroute" class="btn-terminal-copy" title="Copy raw output">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="copy-icon">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span id="copy-btn-text">Copy</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Terminal Sub-bar -->
+        <div class="terminal-meta-bar">
+          <span class="terminal-meta-item">
+            <span class="meta-label">Incident ID:</span>
+            <span id="modal-incident-id" class="meta-val mono">#--</span>
+          </span>
+          <span class="terminal-meta-item">
+            <span class="meta-label">Trigger:</span>
+            <span id="modal-incident-reason" class="meta-val text-amber mono">--</span>
+          </span>
+          <span class="terminal-meta-item">
+            <span class="meta-label">Recorded:</span>
+            <span id="modal-incident-time" class="meta-val mono">--</span>
+          </span>
+        </div>
+
+        <!-- Terminal Content / Raw Traceroute View -->
+        <div class="terminal-body">
+          <pre id="modal-traceroute-content" class="terminal-pre"><code class="mono" id="modal-traceroute-code">Initializing hop telemetry...</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Slide-Over Drawer -->
+  <div id="settings-drawer-backdrop" class="drawer-backdrop hidden" aria-hidden="true"></div>
+  <aside id="settings-drawer" class="settings-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="settings-drawer-title">
+    <div class="drawer-header">
+      <div class="drawer-title-group">
+        <div class="title-with-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="drawer-gear-icon">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <h3 id="settings-drawer-title" class="drawer-title">Daemon Configuration</h3>
+        </div>
+        <p class="drawer-subtitle">Tune probe targets, DNS resolvers, and network SLA thresholds</p>
+      </div>
+      <button id="btn-close-drawer" class="btn-icon" aria-label="Close configuration drawer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Drawer Navigation Tabs -->
+    <nav class="drawer-tabs">
+      <button class="drawer-tab active" data-tab="targets">Ping Targets</button>
+      <button class="drawer-tab" data-tab="dns">DNS Resolvers</button>
+      <button class="drawer-tab" data-tab="thresholds">Probe Engine</button>
+    </nav>
+
+    <!-- Drawer Body -->
+    <div class="drawer-body">
+      <!-- Tab 1: Ping Targets -->
+      <div id="tab-content-targets" class="tab-pane active">
+        <div class="form-section-head">
+          <div>
+            <h4 class="section-title">Ping Targets</h4>
+            <p class="section-desc">Hosts and gateways probed via ICMP echo requests</p>
+          </div>
+        </div>
+
+        <div class="target-table-wrap">
+          <table class="config-table" id="table-config-targets">
+            <thead>
+              <tr>
+                <th>Target Name</th>
+                <th>Host / IP</th>
+                <th>Category</th>
+                <th style="width: 50px; text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="config-targets-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Add Target Card -->
+        <div class="add-item-card">
+          <div class="add-item-title">Add Ping Target</div>
+          <div class="add-item-form-grid">
+            <div class="form-group">
+              <label for="new-target-name">Name</label>
+              <input type="text" id="new-target-name" placeholder="e.g. Europe Game Server">
+            </div>
+            <div class="form-group">
+              <label for="new-target-host">Host / IP</label>
+              <input type="text" id="new-target-host" class="mono" placeholder="e.g. 192.168.1.1 or 8.8.4.4">
+            </div>
+            <div class="form-group">
+              <label for="new-target-category">Category</label>
+              <select id="new-target-category" class="select-control">
+                <option value="LAN">LAN</option>
+                <option value="Public Anycast" selected>Public Anycast</option>
+                <option value="Game Relay">Game Relay</option>
+              </select>
+            </div>
+          </div>
+          <div class="add-item-action">
+            <button type="button" id="btn-add-target" class="btn-secondary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Add Target
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: DNS Resolvers -->
+      <div id="tab-content-dns" class="tab-pane">
+        <div class="form-section-head">
+          <div>
+            <h4 class="section-title">DNS Benchmark Engine</h4>
+            <p class="section-desc">Measure resolution performance across upstream nameservers</p>
+          </div>
+          <div class="toggle-switch-wrap">
+            <label class="switch">
+              <input type="checkbox" id="cfg-dns-enabled" checked>
+              <span class="slider round"></span>
+            </label>
+            <span class="switch-label">Enabled</span>
+          </div>
+        </div>
+
+        <div class="form-grid-2" style="margin-bottom: 1.25rem;">
+          <div class="form-group">
+            <label for="cfg-dns-domain">Benchmark Domain</label>
+            <input type="text" id="cfg-dns-domain" class="mono" placeholder="google.com">
+          </div>
+          <div class="form-group">
+            <label for="cfg-dns-interval">Lookup Interval (seconds)</label>
+            <input type="number" id="cfg-dns-interval" min="5" max="3600" value="30">
+          </div>
+        </div>
+
+        <div class="target-table-wrap">
+          <table class="config-table" id="table-config-dns">
+            <thead>
+              <tr>
+                <th>Server Name</th>
+                <th>Host:Port</th>
+                <th style="width: 50px; text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="config-dns-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Add DNS Server Card -->
+        <div class="add-item-card">
+          <div class="add-item-title">Add DNS Server</div>
+          <div class="add-item-form-grid" style="grid-template-columns: 1fr 1fr;">
+            <div class="form-group">
+              <label for="new-dns-name">Name</label>
+              <input type="text" id="new-dns-name" placeholder="e.g. Quad9 DNS">
+            </div>
+            <div class="form-group">
+              <label for="new-dns-host">Host:Port</label>
+              <input type="text" id="new-dns-host" class="mono" placeholder="e.g. 9.9.9.9:53">
+            </div>
+          </div>
+          <div class="add-item-action">
+            <button type="button" id="btn-add-dns" class="btn-secondary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Add DNS Server
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 3: Probe Thresholds -->
+      <div id="tab-content-thresholds" class="tab-pane">
+        <div class="form-section-head">
+          <div>
+            <h4 class="section-title">ICMP Probe Thresholds</h4>
+            <p class="section-desc">Frequency, timeout bounds, and automated traceroute triggers</p>
+          </div>
+        </div>
+
+        <div class="thresholds-form-container">
+          <div class="form-group">
+            <label for="cfg-probe-interval">Probe Interval (seconds)</label>
+            <input type="number" id="cfg-probe-interval" min="1" max="300" value="15">
+            <small class="field-hint">Time between consecutive ICMP burst probes per target.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="cfg-probe-packets">Burst Packet Count</label>
+            <input type="number" id="cfg-probe-packets" min="1" max="20" value="3">
+            <small class="field-hint">Packets dispatched per burst to assess jitter &amp; loss.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="cfg-probe-timeout">Probe Timeout (seconds)</label>
+            <input type="number" id="cfg-probe-timeout" min="1" max="30" value="3">
+            <small class="field-hint">Time before an unanswered ping is counted as dropped.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="cfg-jitter-threshold">Jitter Alert Threshold (ms)</label>
+            <input type="number" step="0.1" id="cfg-jitter-threshold" min="1" value="120.0">
+            <small class="field-hint">Max standard deviation latency before triggering diagnostics.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="cfg-loss-threshold">Loss Alert Threshold (%)</label>
+            <input type="number" step="0.5" id="cfg-loss-threshold" min="1" max="100" value="10.0">
+            <small class="field-hint">Burst loss percentage that classifies the target as degraded.</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Drawer Footer Actions -->
+    <div class="drawer-footer">
+      <button type="button" id="btn-discard-config" class="btn-ghost">Discard Changes</button>
+      <button type="button" id="btn-save-config" class="btn-primary">
+        <span class="btn-save-text">Save &amp; Apply</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- Application Logic -->
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

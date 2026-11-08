@@ -1,4 +1,4 @@
-package probe
+﻿package probe
 
 import(
 	"context"
@@ -15,30 +15,73 @@ import(
 )
 
 type Engine struct {
-	cfg			config.ProbeConfig
-	targets		[]config.Target
-	sampleChan	chan<- storage.PingSample
-	traceEngine	*traceroute.Engine
+	mu          sync.Mutex
+	cfg         config.ProbeConfig
+	targets     []config.Target
+	sampleChan  chan<- storage.PingSample
+	traceEngine *traceroute.Engine
+	ctx         context.Context
+	wg          *sync.WaitGroup
+	cancels     map[string]context.CancelFunc
 }
 
-func NewEngine(cfg config.ProbeConfig, targets []config.Target, sampleChan chan<- storage.PingSample, traceEngine *traceroute.Engine) *Engine{
+func NewEngine(cfg config.ProbeConfig, targets []config.Target, sampleChan chan<- storage.PingSample, traceEngine *traceroute.Engine) *Engine {
 	return &Engine{
-		cfg:			cfg,
-		targets: 		targets,
-		sampleChan: 	sampleChan,
-		traceEngine:	traceEngine,
+		cfg:         cfg,
+		targets:     targets,
+		sampleChan:  sampleChan,
+		traceEngine: traceEngine,
+		cancels:     make(map[string]context.CancelFunc),
 	}
 }
 
 func (e *Engine) Start(ctx context.Context, wg *sync.WaitGroup) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.ctx = ctx
+	e.wg = wg
+
 	for _, target := range e.targets {
-		wg.Add(1)
-		go e.runTargetWorker(ctx, wg, target)
+		workerCtx, cancel := context.WithCancel(ctx)
+		e.cancels[target.Host] = cancel
+		if e.wg != nil {
+			e.wg.Add(1)
+		}
+		go e.runTargetWorker(workerCtx, target)
 	}
 }
 
-func (e *Engine) runTargetWorker(ctx context.Context, wg *sync.WaitGroup, target config.Target){
-	defer wg.Done()
+func (e *Engine) ReloadTargets(newTargets []config.Target) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	for _, cancel := range e.cancels {
+		cancel()
+	}
+	e.cancels = make(map[string]context.CancelFunc)
+
+	e.targets = make([]config.Target, len(newTargets))
+	copy(e.targets, newTargets)
+
+	if e.ctx != nil && e.ctx.Err() == nil {
+		for _, target := range e.targets {
+			workerCtx, cancel := context.WithCancel(e.ctx)
+			e.cancels[target.Host] = cancel
+			if e.wg != nil {
+				e.wg.Add(1)
+			}
+			go e.runTargetWorker(workerCtx, target)
+		}
+	}
+
+	log.Printf("[Probe] Targets reloaded: %d targets active", len(newTargets))
+}
+
+func (e *Engine) runTargetWorker(ctx context.Context, target config.Target) {
+	if e.wg != nil {
+		defer e.wg.Done()
+	}
 
 	ticker := time.NewTicker(time.Duration(e.cfg.IntervalSeconds) * time.Second)
 	defer ticker.Stop()

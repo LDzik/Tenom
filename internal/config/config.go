@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 type Target struct {
@@ -68,4 +69,56 @@ func LoadConfig(filePath string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func SaveConfig(path string, cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+	if len(cfg.Targets) == 0 {
+		return fmt.Errorf("config validation error: at least one target must be defined")
+	}
+
+	for i, t := range cfg.Targets {
+		if t.Host == "" {
+			return fmt.Errorf("target #%d host cannot be empty", i+1)
+		}
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to serialize config JSON: %w", err)
+	}
+	data = append(data, '\n')
+
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory for config: %w", err)
+		}
+	}
+
+	
+	tmpFile, err := os.CreateTemp(dir, "tenom-config-*.tmp")
+	if err != nil {
+		return os.WriteFile(path, data, 0644)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("failed to write temp config file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temp config file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			return fmt.Errorf("failed to write config file: %w", err)
+		}
+	}
+
+	return nil
 }

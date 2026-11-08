@@ -477,7 +477,7 @@ func (s *Storage) GetHistory(target string, timeRange string) ([]PingHistoryPoin
 	if target != "" {
 		query = `
 		SELECT 
-			datetime((strftime('%s', substr(timestamp, 1, 19)) / ?) * ?, 'unixepoch') AS bucket,
+			datetime((CAST(strftime('%s', substr(timestamp, 1, 19)) AS INTEGER) / ?) * ?, 'unixepoch') AS bucket,
 			ROUND(AVG(rtt_ms), 2) AS avg_rtt,
 			ROUND(AVG(packet_loss), 2) AS avg_packet_loss
 		FROM ping_samples
@@ -489,7 +489,7 @@ func (s *Storage) GetHistory(target string, timeRange string) ([]PingHistoryPoin
 	} else {
 		query = `
 		SELECT 
-			datetime((strftime('%s', substr(timestamp, 1, 19)) / ?) * ?, 'unixepoch') AS bucket,
+			datetime((CAST(strftime('%s', substr(timestamp, 1, 19)) AS INTEGER) / ?) * ?, 'unixepoch') AS bucket,
 			ROUND(AVG(rtt_ms), 2) AS avg_rtt,
 			ROUND(AVG(packet_loss), 2) AS avg_packet_loss
 		FROM ping_samples

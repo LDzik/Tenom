@@ -110,7 +110,7 @@ func main() {
 	dnsEngine.Start(ctx, &wg)
 
 	// REST API HTTP server
-	router := api.NewRouter(db, cfg)
+	router := api.NewRouter(db, cfg, probeEngine)
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler:      router,
