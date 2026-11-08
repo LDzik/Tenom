@@ -1,0 +1,19 @@
+services:
+    tenom:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        image: tenom:latest
+        container_name: tenom
+        restart: unless-stopped
+        ports:
+            - "7366:7366"
+        cap_add:
+            - NET_RAW
+        sysctls:
+            - net.ipv4.ping_group_range=0 2147483647
+        environment:
+            - TZ=Europe/Warsaw
+        volumes:
+            - ./data:/app/data
+            - ./config:/app/config
