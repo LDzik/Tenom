@@ -308,3 +308,53 @@ func TestStorage_PruneOldSamples(t *testing.T) {
 		t.Fatalf("Expected 1 remaining sample, got %d", len(samples))
 	}
 }
+
+func TestStorage_ReconcileOrphanedRecords(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "orphan_test.db")
+
+	store1, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open store1: %v", err)
+	}
+
+	// Simulate an unclosed outage and incident from 48 hours ago before a crash
+	oldStart := time.Now().UTC().Add(-48 * time.Hour)
+	_ = store1.InsertOutage(Outage{
+		StartedAt:       oldStart,
+		ResolvedAt:      nil,
+		DurationSeconds: 30.0,
+		FailureType:     "WAN_OUTAGE",
+	})
+	_ = store1.InsertIncident(Incident{
+		StartedAt:        oldStart,
+		ResolvedAt:       nil,
+		Target:           "1.1.1.1",
+		TriggerReason:    "High loss",
+		TracerouteOutput: "trace",
+	})
+	_ = store1.Close()
+
+	// Re-open storage; startup reconciliation should close both NULL records
+	store2, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to reopen store2: %v", err)
+	}
+	defer store2.Close()
+
+	downtime, err := store2.GetDowntimeSeconds24h()
+	if err != nil {
+		t.Fatalf("GetDowntimeSeconds24h failed: %v", err)
+	}
+	if downtime != 0 {
+		t.Fatalf("Expected 0s downtime in past 24h after reconciling 48h-old orphan, got %f", downtime)
+	}
+
+	incResp, err := store2.GetIncidents(10)
+	if err != nil {
+		t.Fatalf("GetIncidents failed: %v", err)
+	}
+	if len(incResp.Incidents) != 1 || incResp.Incidents[0].ResolvedAt == nil {
+		t.Fatalf("Expected reconciled incident to have non-nil ResolvedAt, got %+v", incResp.Incidents)
+	}
+}

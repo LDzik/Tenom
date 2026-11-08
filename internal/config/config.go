@@ -3,9 +3,28 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
+
+var validHostnameRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
+
+func ValidateHost(host string) error {
+	h := strings.TrimSpace(host)
+	if h == "" || strings.HasPrefix(h, "-") {
+		return fmt.Errorf("invalid host %q: cannot be empty or start with '-'", host)
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return nil
+	}
+	if !validHostnameRe.MatchString(h) {
+		return fmt.Errorf("invalid host %q: must be a valid IP address or RFC 1123 hostname", host)
+	}
+	return nil
+}
 
 type Target struct {
 	Name     string `json:"name"`
@@ -68,6 +87,12 @@ func LoadConfig(filePath string) (*Config, error) {
 		return nil, fmt.Errorf("config validation error: at least one target must be defined")
 	}
 
+	for i, t := range cfg.Targets {
+		if err := ValidateHost(t.Host); err != nil {
+			return nil, fmt.Errorf("target #%d %w", i+1, err)
+		}
+	}
+
 	return &cfg, nil
 }
 
@@ -80,8 +105,8 @@ func SaveConfig(path string, cfg *Config) error {
 	}
 
 	for i, t := range cfg.Targets {
-		if t.Host == "" {
-			return fmt.Errorf("target #%d host cannot be empty", i+1)
+		if err := ValidateHost(t.Host); err != nil {
+			return fmt.Errorf("target #%d %w", i+1, err)
 		}
 	}
 

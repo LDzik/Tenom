@@ -52,6 +52,21 @@ func TestEngine_ReloadTargets(t *testing.T) {
 	}
 	engine.mu.Unlock()
 
+	// Verify duplicate host targets do not overwrite cancel funcs or leak workers
+	dupTargets := []config.Target{
+		{Name: "Dup1", Host: "127.0.0.1", Category: "LAN"},
+		{Name: "Dup2", Host: "127.0.0.1", Category: "WAN"},
+	}
+	engine.ReloadTargets(dupTargets)
+
+	engine.mu.Lock()
+	if len(engine.cancels) != 2 {
+		engine.mu.Unlock()
+		t.Fatalf("Expected 2 cancels for duplicate hosts, got %d", len(engine.cancels))
+	}
+	engine.mu.Unlock()
+
 	cancel()
 	wg.Wait()
+	close(sampleChan)
 }

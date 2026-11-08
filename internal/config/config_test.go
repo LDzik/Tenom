@@ -65,4 +65,11 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	if err := config.SaveConfig(cfgPath, cfg); err == nil {
 		t.Errorf("Expected validation error for empty targets")
 	}
+
+	// 4. Reject leading hyphen or command injection in target host
+	for _, badHost := range []string{"-w 9999", "--help", "1.1.1.1; rm -rf /", ""} {
+		if err := config.ValidateHost(badHost); err == nil {
+			t.Errorf("Expected ValidateHost to reject %q", badHost)
+		}
+	}
 }

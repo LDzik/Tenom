@@ -60,12 +60,13 @@ func main() {
 	dnsChan := make(chan storage.DNSSample, 64)
 	incidentChan := make(chan storage.Incident, 16)
 
-	var wg sync.WaitGroup
+	var producerWg sync.WaitGroup
+	var consumerWg sync.WaitGroup
 
 	// Storage ingestion worker
-	wg.Add(1)
+	consumerWg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer consumerWg.Done()
 		for pingChan != nil || dnsChan != nil || incidentChan != nil {
 			select {
 			case sample, ok := <-pingChan:
@@ -101,16 +102,16 @@ func main() {
 	}()
 
 	// Diagnostic engines
-	traceEngine := traceroute.NewEngine(3*time.Minute, incidentChan)
+	traceEngine := traceroute.NewEngine(ctx, &producerWg, 3*time.Minute, incidentChan)
 
 	probeEngine := probe.NewEngine(cfg.Probe, cfg.Targets, pingChan, traceEngine)
-	probeEngine.Start(ctx, &wg)
+	probeEngine.Start(ctx, &producerWg)
 
 	dnsEngine := probe.NewDNSEngine(cfg.DNS, dnsChan)
-	dnsEngine.Start(ctx, &wg)
+	dnsEngine.Start(ctx, &producerWg)
 
 	// REST API HTTP server
-	router := api.NewRouter(db, cfg, probeEngine)
+	router := api.NewRouter(db, cfg, probeEngine, outageTracker)
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler:      router,
@@ -141,17 +142,21 @@ func main() {
 		log.Println("[API] Server stopped cleanly.")
 	}
 
+	// 1. Wait for all producers (ping workers, DNS workers, traceroute subprocesses) to exit
+	producerWg.Wait()
+
+	// 2. Safely close channels now that zero producers are running
+	close(pingChan)
+	close(dnsChan)
+	close(incidentChan)
+
+	// 3. Wait for the storage ingestion worker to drain all remaining buffered items
+	consumerWg.Wait()
+
+	// 4. Flush any active outage after all samples have been processed
 	if err := outageTracker.Close(); err != nil {
 		log.Printf("[Outage] Error closing outage tracker: %v", err)
 	}
 
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		close(pingChan)
-		close(dnsChan)
-		close(incidentChan)
-	}()
-
-	wg.Wait()
 	log.Println("[Tenom] Shutdown complete.")
 }

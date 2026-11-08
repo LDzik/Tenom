@@ -22,11 +22,11 @@ type TargetReloader interface {
 }
 
 type Server struct {
-	storage       *storage.Storage
-	cfg           *config.Config
-	cfgMu         sync.RWMutex
-	configPath    string
-	probeReloader TargetReloader
+	storage    *storage.Storage
+	cfg        *config.Config
+	cfgMu      sync.RWMutex
+	configPath string
+	reloaders  []TargetReloader
 }
 
 func NewRouter(store *storage.Storage, cfg *config.Config, reloader ...TargetReloader) http.Handler {
@@ -38,16 +38,11 @@ func NewRouterWithPath(store *storage.Storage, cfg *config.Config, configPath st
 		configPath = "config.json"
 	}
 
-	var rldr TargetReloader
-	if len(reloader) > 0 {
-		rldr = reloader[0]
-	}
-
 	s := &Server{
-		storage:       store,
-		cfg:           cfg,
-		configPath:    configPath,
-		probeReloader: rldr,
+		storage:    store,
+		cfg:        cfg,
+		configPath: configPath,
+		reloaders:  reloader,
 	}
 
 	r := chi.NewRouter()
@@ -238,8 +233,8 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for i, t := range updated.Targets {
-		if strings.TrimSpace(t.Host) == "" {
-			renderError(w, http.StatusBadRequest, fmt.Sprintf("Target #%d host cannot be empty", i+1))
+		if err := config.ValidateHost(t.Host); err != nil {
+			renderError(w, http.StatusBadRequest, fmt.Sprintf("Target #%d %v", i+1, err))
 			return
 		}
 		if strings.TrimSpace(t.Name) == "" {
@@ -314,8 +309,10 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		*s.cfg = updated
 	}
 
-	if s.probeReloader != nil {
-		s.probeReloader.ReloadTargets(updated.Targets)
+	for _, rldr := range s.reloaders {
+		if rldr != nil {
+			rldr.ReloadTargets(updated.Targets)
+		}
 	}
 
 	renderJSON(w, http.StatusOK, map[string]interface{}{

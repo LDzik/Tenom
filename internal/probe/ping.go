@@ -1,4 +1,4 @@
-﻿package probe
+package probe
 
 import(
 	"context"
@@ -21,8 +21,8 @@ type Engine struct {
 	sampleChan  chan<- storage.PingSample
 	traceEngine *traceroute.Engine
 	ctx         context.Context
-	wg          *sync.WaitGroup
-	cancels     map[string]context.CancelFunc
+	workerWg    sync.WaitGroup
+	cancels     []context.CancelFunc
 }
 
 func NewEngine(cfg config.ProbeConfig, targets []config.Target, sampleChan chan<- storage.PingSample, traceEngine *traceroute.Engine) *Engine {
@@ -31,7 +31,6 @@ func NewEngine(cfg config.ProbeConfig, targets []config.Target, sampleChan chan<
 		targets:     targets,
 		sampleChan:  sampleChan,
 		traceEngine: traceEngine,
-		cancels:     make(map[string]context.CancelFunc),
 	}
 }
 
@@ -40,15 +39,20 @@ func (e *Engine) Start(ctx context.Context, wg *sync.WaitGroup) {
 	defer e.mu.Unlock()
 
 	e.ctx = ctx
-	e.wg = wg
+	e.spawnWorkersLocked()
 
-	for _, target := range e.targets {
-		workerCtx, cancel := context.WithCancel(ctx)
-		e.cancels[target.Host] = cancel
-		if e.wg != nil {
-			e.wg.Add(1)
-		}
-		go e.runTargetWorker(workerCtx, target)
+	if wg != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-ctx.Done()
+			e.mu.Lock()
+			for _, cancel := range e.cancels {
+				cancel()
+			}
+			e.mu.Unlock()
+			e.workerWg.Wait()
+		}()
 	}
 }
 
@@ -59,36 +63,37 @@ func (e *Engine) ReloadTargets(newTargets []config.Target) {
 	for _, cancel := range e.cancels {
 		cancel()
 	}
-	e.cancels = make(map[string]context.CancelFunc)
+	e.workerWg.Wait()
+	e.cancels = nil
 
 	e.targets = make([]config.Target, len(newTargets))
 	copy(e.targets, newTargets)
 
-	if e.ctx != nil && e.ctx.Err() == nil {
-		for _, target := range e.targets {
-			workerCtx, cancel := context.WithCancel(e.ctx)
-			e.cancels[target.Host] = cancel
-			if e.wg != nil {
-				e.wg.Add(1)
-			}
-			go e.runTargetWorker(workerCtx, target)
-		}
-	}
-
+	e.spawnWorkersLocked()
 	log.Printf("[Probe] Targets reloaded: %d targets active", len(newTargets))
 }
 
-func (e *Engine) runTargetWorker(ctx context.Context, target config.Target) {
-	if e.wg != nil {
-		defer e.wg.Done()
+func (e *Engine) spawnWorkersLocked() {
+	if e.ctx != nil && e.ctx.Err() == nil {
+		e.cancels = make([]context.CancelFunc, 0, len(e.targets))
+		for _, target := range e.targets {
+			workerCtx, cancel := context.WithCancel(e.ctx)
+			e.cancels = append(e.cancels, cancel)
+			e.workerWg.Add(1)
+			go e.runTargetWorker(workerCtx, target)
+		}
 	}
+}
+
+func (e *Engine) runTargetWorker(ctx context.Context, target config.Target) {
+	defer e.workerWg.Done()
 
 	ticker := time.NewTicker(time.Duration(e.cfg.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
 	log.Printf("[Probe] Worker started for %s (%s)", target.Name, target.Host)
 
-	e.executePing(target)
+	e.executePing(ctx, target)
 
 	for {
 		select {
@@ -96,13 +101,12 @@ func (e *Engine) runTargetWorker(ctx context.Context, target config.Target) {
 			log.Printf("[Probe] Worker stopping for %s", target.Name)
 			return
 		case <-ticker.C:
-			e.executePing(target)
+			e.executePing(ctx, target)
 		}
 	}
 }
 
-
-func (e *Engine) executePing(target config.Target) {
+func (e *Engine) executePing(ctx context.Context, target config.Target) {
 	pinger, err := probing.NewPinger(target.Host)
 	if err != nil {
 		log.Printf("[Probe] [%s] Failed to resolve target host: %v", target.Name, err)
@@ -113,7 +117,10 @@ func (e *Engine) executePing(target config.Target) {
 	pinger.Count = e.cfg.PacketCount
 	pinger.Timeout = time.Duration(e.cfg.TimeoutSeconds) * time.Second
 
-	err = pinger.Run()
+	err = pinger.RunWithContext(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		log.Printf("[Probe] [%s] Ping execution error: %v", target.Name, err)
 		return

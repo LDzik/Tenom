@@ -59,6 +59,24 @@ func NewOutageTracker(cfg config.ProbeConfig, targets []config.Target, store Out
 	}
 }
 
+func (o *OutageTracker) ReloadTargets(newTargets []config.Target) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	targetMap := make(map[string]config.Target, len(newTargets))
+	for _, t := range newTargets {
+		targetMap[t.Host] = t
+	}
+	o.targets = targetMap
+
+	for host := range o.latestSamples {
+		if _, exists := targetMap[host]; !exists {
+			delete(o.latestSamples, host)
+		}
+	}
+	o.currentState, _ = o.evaluateState()
+}
+
 func (o *OutageTracker) evaluateState() (NetworkState, string) {
 	if len(o.latestSamples) == 0 {
 		return StateHealthy, ""
@@ -123,8 +141,8 @@ func (o *OutageTracker) evaluateState() (NetworkState, string) {
 }
 
 func (o *OutageTracker) RecordPing(sample storage.PingSample) {
+	var resolvedRecord *storage.Outage
 	o.mu.Lock()
-	defer o.mu.Unlock()
 
 	o.latestSamples[sample.Target] = sample
 	newState, failureType := o.evaluateState()
@@ -159,22 +177,24 @@ func (o *OutageTracker) RecordPing(sample storage.PingSample) {
 			log.Printf("[Outage] Connection recovered! Total downtime: %.1fs (Type: %s)", duration, ft)
 
 			if o.store != nil {
-				record := storage.Outage{
+				resolvedRecord = &storage.Outage{
 					StartedAt:       startedAt,
 					ResolvedAt:      &resolvedAt,
 					DurationSeconds: duration,
 					FailureType:     ft,
 				}
-				go func(rec storage.Outage) {
-					if err := o.store.InsertOutage(rec); err != nil {
-						log.Printf("[Outage] Failed to save resolved outage: %v", err)
-					}
-				}(record)
 			}
 		}
 	}
 
 	o.currentState = newState
+	o.mu.Unlock()
+
+	if resolvedRecord != nil && o.store != nil {
+		if err := o.store.InsertOutage(*resolvedRecord); err != nil {
+			log.Printf("[Outage] Failed to save resolved outage: %v", err)
+		}
+	}
 }
 
 func (o *OutageTracker) GetNetworkState() (string, *time.Time, string) {

@@ -108,9 +108,6 @@ func TestOutageEngine_StateTransitions(t *testing.T) {
 		t.Fatalf("Expected Healthy after recovery, got state=%s, startedAt=%v", state, startedAt)
 	}
 
-	// Wait briefly for goroutine persistence
-	time.Sleep(50 * time.Millisecond)
-
 	mockStore.mu.Lock()
 	defer mockStore.mu.Unlock()
 	if len(mockStore.outages) != 1 {
@@ -122,6 +119,34 @@ func TestOutageEngine_StateTransitions(t *testing.T) {
 	}
 	if saved.FailureType != FailureGatewayDrop {
 		t.Fatalf("Expected FailureGatewayDrop, got %s", saved.FailureType)
+	}
+}
+
+func TestOutageEngine_ReloadTargetsPurgesStaleSamples(t *testing.T) {
+	cfg := config.ProbeConfig{LossThresholdPct: 10.0, JitterThresholdMs: 120.0}
+	targets := []config.Target{
+		{Name: "Gateway", Host: "192.168.1.1", Category: "LAN"},
+		{Name: "DeadHost", Host: "192.0.2.99", Category: "WAN"},
+	}
+
+	tracker := NewOutageTracker(cfg, targets, &mockStorage{})
+	now := time.Now()
+	tracker.RecordPing(storage.PingSample{Target: "192.168.1.1", Category: "LAN", RttMs: 1.0, PacketLoss: 0, Timestamp: now})
+	tracker.RecordPing(storage.PingSample{Target: "192.0.2.99", Category: "WAN", RttMs: 0, PacketLoss: 100.0, Timestamp: now})
+
+	state, _, _ := tracker.GetNetworkState()
+	if state != string(StateDown) {
+		t.Fatalf("Expected Down with dead WAN host, got %s", state)
+	}
+
+	// Remove the dead target via ReloadTargets
+	tracker.ReloadTargets([]config.Target{
+		{Name: "Gateway", Host: "192.168.1.1", Category: "LAN"},
+	})
+
+	state, _, _ = tracker.GetNetworkState()
+	if state != string(StateHealthy) {
+		t.Fatalf("Expected Healthy immediately after removing dead target, got %s", state)
 	}
 }
 

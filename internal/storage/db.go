@@ -55,8 +55,28 @@ func New(dbPath string) (*Storage, error) {
 		db.Close()
 		return nil, fmt.Errorf("failed to apply migration: %w", err)
 	}
+	if err := s.reconcileOrphanedRecords(); err != nil {
+		log.Printf("[Storage] Warning: failed to reconcile orphaned records: %v", err)
+	}
 
 	return s, nil
+}
+
+func (s *Storage) reconcileOrphanedRecords() error {
+	nowTs := formatDBTime(time.Now().UTC())
+	_, err := s.db.Exec(`
+		UPDATE outages
+		SET resolved_at = COALESCE(
+			datetime(started_at, printf('+%d seconds', CAST(duration_seconds AS INTEGER))),
+			?
+		)
+		WHERE resolved_at IS NULL;
+
+		UPDATE incidents
+		SET resolved_at = ?
+		WHERE resolved_at IS NULL;
+	`, nowTs, nowTs)
+	return err
 }
 
 func (s *Storage) SetOutageTracker(tracker OutageStateProvider) {

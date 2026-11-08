@@ -1,6 +1,6 @@
 package traceroute
 
-import(
+import (
 	"context"
 	"fmt"
 	"log"
@@ -9,25 +9,37 @@ import(
 	"sync"
 	"time"
 
+	"github.com/LDzik/Tenom/internal/config"
 	"github.com/LDzik/Tenom/internal/storage"
 )
 
 type Engine struct {
-	cooldownDuration	time.Duration
-	incidentChan		chan<- storage.Incident
-	mu					sync.Mutex
-	lastTriggered		map[string]time.Time
+	rootCtx          context.Context
+	wg               *sync.WaitGroup
+	cooldownDuration time.Duration
+	incidentChan     chan<- storage.Incident
+	mu               sync.Mutex
+	lastTriggered    map[string]time.Time
 }
 
-func NewEngine(cooldown time.Duration, incidentChan chan<- storage.Incident) *Engine {
+func NewEngine(rootCtx context.Context, wg *sync.WaitGroup, cooldown time.Duration, incidentChan chan<- storage.Incident) *Engine {
+	if rootCtx == nil {
+		rootCtx = context.Background()
+	}
 	return &Engine{
-		cooldownDuration:	cooldown,
-		incidentChan:		incidentChan,
-		lastTriggered:		make(map[string]time.Time),
+		rootCtx:          rootCtx,
+		wg:               wg,
+		cooldownDuration: cooldown,
+		incidentChan:     incidentChan,
+		lastTriggered:    make(map[string]time.Time),
 	}
 }
 
 func (e *Engine) Trigger(targetHost string, reason string) {
+	if e.rootCtx.Err() != nil || config.ValidateHost(targetHost) != nil {
+		return
+	}
+
 	e.mu.Lock()
 	lastTime, exists := e.lastTriggered[targetHost]
 	if exists && time.Since(lastTime) < e.cooldownDuration {
@@ -39,13 +51,19 @@ func (e *Engine) Trigger(targetHost string, reason string) {
 
 	log.Printf("[Diagnostic] ANOMALY DETECTED on %s (%s). Launching traceroute...", targetHost, reason)
 
+	if e.wg != nil {
+		e.wg.Add(1)
+	}
 	go e.executeTrace(targetHost, reason)
 }
 
 func (e *Engine) executeTrace(targetHost string, reason string) {
+	if e.wg != nil {
+		defer e.wg.Done()
+	}
 	startTime := time.Now()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45 * time.Second)
+	ctx, cancel := context.WithTimeout(e.rootCtx, 45*time.Second)
 	defer cancel()
 
 	var cmd *exec.Cmd
@@ -57,13 +75,16 @@ func (e *Engine) executeTrace(targetHost string, reason string) {
 		cmd = exec.CommandContext(ctx, "tracert", "-d", "-h", "20", "-w", "1000", targetHost)
 	} else {
 		if _, err := exec.LookPath("traceroute"); err == nil {
-			cmd = exec.CommandContext(ctx, "traceroute", "-n", "-m", "20", "-w", "1", targetHost)
+			cmd = exec.CommandContext(ctx, "traceroute", "-n", "-m", "20", "-w", "1", "--", targetHost)
 		} else {
-			cmd = exec.CommandContext(ctx, "tracepath", "-n", "-m", "20", targetHost)
+			cmd = exec.CommandContext(ctx, "tracepath", "-n", "-m", "20", "--", targetHost)
 		}
 	}
 
 	outputBytes, err := cmd.CombinedOutput()
+	if e.rootCtx.Err() != nil {
+		return
+	}
 	output := string(outputBytes)
 
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
@@ -75,11 +96,13 @@ func (e *Engine) executeTrace(targetHost string, reason string) {
 	log.Printf("[Diagnostic] Traceroute finished for %s in %s. Saving incident snapshot...",
 		targetHost, time.Since(startTime).Round(time.Millisecond))
 
+	completedAt := time.Now()
 	incident := storage.Incident{
-		StartedAt:			startTime,
-		Target:				targetHost,
-		TriggerReason:		reason,
-		TracerouteOutput:	output,
+		StartedAt:        startTime,
+		ResolvedAt:       &completedAt,
+		Target:           targetHost,
+		TriggerReason:    reason,
+		TracerouteOutput: output,
 	}
 
 	select {
