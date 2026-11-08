@@ -22,6 +22,7 @@ type OutageStateProvider interface {
 
 type Storage struct {
 	db            *sql.DB
+	readDB        *sql.DB
 	trackerMu     sync.RWMutex
 	outageTracker OutageStateProvider
 }
@@ -50,7 +51,16 @@ func New(dbPath string) (*Storage, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	s := &Storage{db: db}
+	readDSN := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=query_only(1)", dbPath)
+	readDB, err := sql.Open("sqlite", readDSN)
+	if err != nil {
+		readDB = db
+	} else {
+		readDB.SetMaxOpenConns(4)
+		readDB.SetConnMaxLifetime(0)
+	}
+
+	s := &Storage{db: db, readDB: readDB}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to apply migration: %w", err)
@@ -129,9 +139,13 @@ func (s *Storage) migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_ping_samples_ts ON ping_samples(target, timestamp);
+	CREATE INDEX IF NOT EXISTS idx_ping_samples_target_id ON ping_samples(target, id DESC);
+	CREATE INDEX IF NOT EXISTS idx_ping_samples_ts_only ON ping_samples(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_dns_samples_ts ON dns_samples(server, timestamp);
+	CREATE INDEX IF NOT EXISTS idx_dns_samples_ts_only ON dns_samples(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_incidents_target ON incidents(target, started_at);
 	CREATE INDEX IF NOT EXISTS idx_outages_started ON outages(started_at);
+	CREATE INDEX IF NOT EXISTS idx_outages_resolved ON outages(resolved_at);
 	`
 	_, err := s.db.Exec(query)
 	return err
@@ -226,15 +240,20 @@ func (s *Storage) InsertOutage(outage Outage) error {
 }
 
 func (s *Storage) PruneOldSamples(retentionDays int) (int64, error) {
-	queryPing := `DELETE FROM ping_samples WHERE datetime(substr(timestamp, 1, 19)) < datetime('now', printf('-%d days', ?));`
-	res1, err := s.db.Exec(queryPing, retentionDays)
+	if retentionDays <= 0 {
+		retentionDays = 7
+	}
+	cutoff := formatDBTime(time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour))
+
+	queryPing := `DELETE FROM ping_samples WHERE timestamp < ?;`
+	res1, err := s.db.Exec(queryPing, cutoff)
 	if err != nil {
 		return 0, err
 	}
 	n1, _ := res1.RowsAffected()
 
-	queryDNS := `DELETE FROM dns_samples WHERE datetime(substr(timestamp, 1, 19)) < datetime('now', printf('-%d days', ?));`
-	res2, err := s.db.Exec(queryDNS, retentionDays)
+	queryDNS := `DELETE FROM dns_samples WHERE timestamp < ?;`
+	res2, err := s.db.Exec(queryDNS, cutoff)
 	if err != nil {
 		return n1, err
 	}
@@ -265,16 +284,16 @@ func (s *Storage) StartPruningWorker(ctx context.Context, retentionDays int) {
 
 func (s *Storage) GetLatestSamples() ([]PingSample, error) {
 	query := `
-	SELECT id, target, category, rtt_ms, packet_loss, timestamp
-	FROM (
-		SELECT id, target, category, rtt_ms, packet_loss, timestamp,
-		       ROW_NUMBER() OVER(PARTITION BY target ORDER BY id DESC) as rn
+	SELECT p.id, p.target, p.category, p.rtt_ms, p.packet_loss, p.timestamp
+	FROM ping_samples p
+	INNER JOIN (
+		SELECT MAX(id) AS max_id
 		FROM ping_samples
-	)
-	WHERE rn = 1
-	ORDER BY target ASC
+		GROUP BY target
+	) latest ON p.id = latest.max_id
+	ORDER BY p.target ASC
 	`
-	rows, err := s.db.Query(query)
+	rows, err := s.readDB.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query latest samples: %w", err)
 	}
@@ -305,10 +324,10 @@ func (s *Storage) GetDowntimeSeconds24h() (float64, error) {
 	query := `
 	SELECT started_at, resolved_at, duration_seconds
 	FROM outages
-	WHERE datetime(substr(resolved_at, 1, 19)) >= datetime(?)
+	WHERE resolved_at >= ?
 	   OR resolved_at IS NULL
 	`
-	rows, err := s.db.Query(query, cutoff)
+	rows, err := s.readDB.Query(query, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("failed to query outages for 24h downtime: %w", err)
 	}
@@ -501,11 +520,11 @@ func (s *Storage) GetHistory(target string, timeRange string) ([]PingHistoryPoin
 			ROUND(AVG(rtt_ms), 2) AS avg_rtt,
 			ROUND(AVG(packet_loss), 2) AS avg_packet_loss
 		FROM ping_samples
-		WHERE target = ? AND datetime(substr(timestamp, 1, 19)) >= datetime(?)
+		WHERE target = ? AND timestamp >= ?
 		GROUP BY bucket
 		ORDER BY bucket ASC
 		`
-		rows, err = s.db.Query(query, bucketSeconds, bucketSeconds, target, cutoff)
+		rows, err = s.readDB.Query(query, bucketSeconds, bucketSeconds, target, cutoff)
 	} else {
 		query = `
 		SELECT 
@@ -513,11 +532,11 @@ func (s *Storage) GetHistory(target string, timeRange string) ([]PingHistoryPoin
 			ROUND(AVG(rtt_ms), 2) AS avg_rtt,
 			ROUND(AVG(packet_loss), 2) AS avg_packet_loss
 		FROM ping_samples
-		WHERE datetime(substr(timestamp, 1, 19)) >= datetime(?)
+		WHERE timestamp >= ?
 		GROUP BY bucket
 		ORDER BY bucket ASC
 		`
-		rows, err = s.db.Query(query, bucketSeconds, bucketSeconds, cutoff)
+		rows, err = s.readDB.Query(query, bucketSeconds, bucketSeconds, cutoff)
 	}
 
 	if err != nil {
@@ -578,14 +597,14 @@ func (s *Storage) GetDNSHistory(timeRange string) ([]DNSHistoryPoint, error) {
 	query := `
 	SELECT 
 		server,
-		datetime((strftime('%s', substr(timestamp, 1, 19)) / ?) * ?, 'unixepoch') AS bucket,
+		datetime((CAST(strftime('%s', substr(timestamp, 1, 19)) AS INTEGER) / ?) * ?, 'unixepoch') AS bucket,
 		ROUND(AVG(latency_ms), 2) AS avg_latency
 	FROM dns_samples
-	WHERE datetime(substr(timestamp, 1, 19)) >= datetime(?)
+	WHERE timestamp >= ?
 	GROUP BY server, bucket
 	ORDER BY bucket ASC, server ASC
 	`
-	rows, err := s.db.Query(query, bucketSeconds, bucketSeconds, cutoff)
+	rows, err := s.readDB.Query(query, bucketSeconds, bucketSeconds, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query dns history: %w", err)
 	}
@@ -629,7 +648,7 @@ func (s *Storage) GetTraceroutes(limit int) ([]Incident, error) {
 	ORDER BY id DESC
 	LIMIT ?
 	`
-	rows, err := s.db.Query(query, limit)
+	rows, err := s.readDB.Query(query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query traceroutes: %w", err)
 	}
@@ -671,7 +690,7 @@ func (s *Storage) GetOutages(limit int) ([]Outage, error) {
 	ORDER BY id DESC
 	LIMIT ?
 	`
-	rows, err := s.db.Query(query, limit)
+	rows, err := s.readDB.Query(query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query outages: %w", err)
 	}
@@ -726,5 +745,8 @@ func (s *Storage) GetIncidents(limit int) (*IncidentsResponse, error) {
 }
 
 func (s *Storage) Close() error {
+	if s.readDB != nil && s.readDB != s.db {
+		_ = s.readDB.Close()
+	}
 	return s.db.Close()
 }

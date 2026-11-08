@@ -26,6 +26,117 @@ func ValidateHost(host string) error {
 	return nil
 }
 
+func ValidateDNSServerHost(hostPort string) error {
+	hp := strings.TrimSpace(hostPort)
+	if hp == "" || strings.HasPrefix(hp, "-") {
+		return fmt.Errorf("invalid DNS server host %q: cannot be empty or start with '-'", hostPort)
+	}
+	host := hp
+	if strings.Contains(hp, ":") {
+		if h, _, err := net.SplitHostPort(hp); err == nil {
+			host = h
+		} else if ip := net.ParseIP(hp); ip != nil {
+			return nil
+		} else {
+			return fmt.Errorf("invalid DNS server address %q: %w", hostPort, err)
+		}
+	}
+	return ValidateHost(host)
+}
+
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	if c.Targets != nil {
+		cp.Targets = make([]Target, len(c.Targets))
+		copy(cp.Targets, c.Targets)
+	}
+	if c.DNS.Servers != nil {
+		cp.DNS.Servers = make([]DNSServer, len(c.DNS.Servers))
+		copy(cp.DNS.Servers, c.DNS.Servers)
+	}
+	return &cp
+}
+
+func (c *Config) SanitizeAndValidate() error {
+	if c == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+	if len(c.Targets) == 0 {
+		return fmt.Errorf("config validation error: at least one target must be defined")
+	}
+
+	for i, t := range c.Targets {
+		if err := ValidateHost(t.Host); err != nil {
+			return fmt.Errorf("target #%d %w", i+1, err)
+		}
+		c.Targets[i].Host = strings.TrimSpace(t.Host)
+		if strings.TrimSpace(t.Name) == "" {
+			c.Targets[i].Name = c.Targets[i].Host
+		}
+		if strings.TrimSpace(t.Category) == "" {
+			c.Targets[i].Category = "WAN"
+		}
+	}
+
+	if c.Probe.IntervalSeconds <= 0 {
+		c.Probe.IntervalSeconds = 15
+	} else if c.Probe.IntervalSeconds > 3600 {
+		c.Probe.IntervalSeconds = 3600
+	}
+	if c.Probe.PacketCount <= 0 {
+		c.Probe.PacketCount = 3
+	} else if c.Probe.PacketCount > 20 {
+		c.Probe.PacketCount = 20
+	}
+	if c.Probe.TimeoutSeconds <= 0 {
+		c.Probe.TimeoutSeconds = 3
+	} else if c.Probe.TimeoutSeconds > 60 {
+		c.Probe.TimeoutSeconds = 60
+	}
+	if c.Probe.JitterThresholdMs <= 0 {
+		c.Probe.JitterThresholdMs = 120.0
+	}
+	if c.Probe.LossThresholdPct <= 0 {
+		c.Probe.LossThresholdPct = 10.0
+	} else if c.Probe.LossThresholdPct > 100.0 {
+		c.Probe.LossThresholdPct = 100.0
+	}
+
+	if c.DNS.IntervalSeconds <= 0 {
+		c.DNS.IntervalSeconds = 30
+	} else if c.DNS.IntervalSeconds > 3600 {
+		c.DNS.IntervalSeconds = 3600
+	}
+	if c.DNS.TimeoutSeconds <= 0 {
+		c.DNS.TimeoutSeconds = 3
+	} else if c.DNS.TimeoutSeconds > 30 {
+		c.DNS.TimeoutSeconds = 30
+	}
+	if strings.TrimSpace(c.DNS.Domain) == "" {
+		c.DNS.Domain = "google.com"
+	}
+
+	if c.DNS.Enabled {
+		for i, srv := range c.DNS.Servers {
+			if err := ValidateDNSServerHost(srv.Host); err != nil {
+				return fmt.Errorf("DNS server #%d %w", i+1, err)
+			}
+			c.DNS.Servers[i].Host = strings.TrimSpace(srv.Host)
+			if strings.TrimSpace(srv.Name) == "" {
+				c.DNS.Servers[i].Name = c.DNS.Servers[i].Host
+			}
+		}
+	}
+
+	if c.Database.RetentionDays <= 0 {
+		c.Database.RetentionDays = 7
+	}
+	return nil
+}
+
 type Target struct {
 	Name     string `json:"name"`
 	Host     string `json:"host"`
@@ -83,31 +194,16 @@ func LoadConfig(filePath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config JSON: %w", err)
 	}
 
-	if len(cfg.Targets) == 0 {
-		return nil, fmt.Errorf("config validation error: at least one target must be defined")
-	}
-
-	for i, t := range cfg.Targets {
-		if err := ValidateHost(t.Host); err != nil {
-			return nil, fmt.Errorf("target #%d %w", i+1, err)
-		}
+	if err := cfg.SanitizeAndValidate(); err != nil {
+		return nil, err
 	}
 
 	return &cfg, nil
 }
 
 func SaveConfig(path string, cfg *Config) error {
-	if cfg == nil {
-		return fmt.Errorf("config cannot be nil")
-	}
-	if len(cfg.Targets) == 0 {
-		return fmt.Errorf("config validation error: at least one target must be defined")
-	}
-
-	for i, t := range cfg.Targets {
-		if err := ValidateHost(t.Host); err != nil {
-			return fmt.Errorf("target #%d %w", i+1, err)
-		}
+	if err := cfg.SanitizeAndValidate(); err != nil {
+		return err
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")

@@ -164,13 +164,22 @@ func TestRouter_DNSMetrics(t *testing.T) {
 		t.Fatalf("Unexpected DNS points: %+v", points)
 	}
 
-	// 2. Invalid range
+	// 2. 7d range supported
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/metrics/dns?range=7d", nil)
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 for 7d on DNS, got %d", rec.Code)
+	}
+
+	// 3. Invalid range
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/metrics/dns?range=invalid", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("Expected 400 for 7d on DNS, got %d", rec.Code)
+		t.Fatalf("Expected 400 for invalid range on DNS, got %d", rec.Code)
 	}
 }
 
@@ -338,6 +347,29 @@ func TestRouter_Config(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("Expected 400 for empty targets, got %d", rec.Code)
+	}
+
+	// 4. PUT /api/v1/config cannot overwrite immutable Database.Path or Server.Port
+	tamperedCfg := verifiedCfg
+	tamperedCfg.Database.Path = "../../evil.db"
+	tamperedCfg.Server.Port = 9999
+	tamperedPayload, _ := json.Marshal(tamperedCfg)
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/config", strings.NewReader(string(tamperedPayload)))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200 for PUT /api/v1/config, got %d", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	var afterTamper config.Config
+	_ = json.Unmarshal(rec.Body.Bytes(), &afterTamper)
+	if afterTamper.Database.Path == "../../evil.db" || afterTamper.Server.Port == 9999 {
+		t.Fatalf("Expected Database.Path and Server.Port to remain immutable, got path=%q port=%d",
+			afterTamper.Database.Path, afterTamper.Server.Port)
 	}
 }
 

@@ -15,22 +15,28 @@ import(
 )
 
 type Engine struct {
-	mu          sync.Mutex
-	cfg         config.ProbeConfig
-	targets     []config.Target
-	sampleChan  chan<- storage.PingSample
-	traceEngine *traceroute.Engine
-	ctx         context.Context
-	workerWg    sync.WaitGroup
-	cancels     []context.CancelFunc
+	mu            sync.Mutex
+	cfg           config.ProbeConfig
+	targets       []config.Target
+	sampleChan    chan<- storage.PingSample
+	traceEngine   *traceroute.Engine
+	outageTracker *OutageTracker
+	ctx           context.Context
+	workerWg      sync.WaitGroup
+	cancels       []context.CancelFunc
 }
 
-func NewEngine(cfg config.ProbeConfig, targets []config.Target, sampleChan chan<- storage.PingSample, traceEngine *traceroute.Engine) *Engine {
+func NewEngine(cfg config.ProbeConfig, targets []config.Target, sampleChan chan<- storage.PingSample, traceEngine *traceroute.Engine, tracker ...*OutageTracker) *Engine {
+	var ot *OutageTracker
+	if len(tracker) > 0 {
+		ot = tracker[0]
+	}
 	return &Engine{
-		cfg:         cfg,
-		targets:     targets,
-		sampleChan:  sampleChan,
-		traceEngine: traceEngine,
+		cfg:           cfg,
+		targets:       targets,
+		sampleChan:    sampleChan,
+		traceEngine:   traceEngine,
+		outageTracker: ot,
 	}
 }
 
@@ -58,6 +64,13 @@ func (e *Engine) Start(ctx context.Context, wg *sync.WaitGroup) {
 
 func (e *Engine) ReloadTargets(newTargets []config.Target) {
 	e.mu.Lock()
+	cfg := e.cfg
+	e.mu.Unlock()
+	e.ReloadProbe(cfg, newTargets)
+}
+
+func (e *Engine) ReloadProbe(newCfg config.ProbeConfig, newTargets []config.Target) {
+	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	for _, cancel := range e.cancels {
@@ -66,6 +79,9 @@ func (e *Engine) ReloadTargets(newTargets []config.Target) {
 	e.workerWg.Wait()
 	e.cancels = nil
 
+	if newCfg.IntervalSeconds > 0 {
+		e.cfg = newCfg
+	}
 	e.targets = make([]config.Target, len(newTargets))
 	copy(e.targets, newTargets)
 
@@ -75,25 +91,35 @@ func (e *Engine) ReloadTargets(newTargets []config.Target) {
 
 func (e *Engine) spawnWorkersLocked() {
 	if e.ctx != nil && e.ctx.Err() == nil {
+		if e.cfg.IntervalSeconds <= 0 {
+			e.cfg.IntervalSeconds = 15
+		}
+		if e.cfg.PacketCount <= 0 {
+			e.cfg.PacketCount = 3
+		}
+		if e.cfg.TimeoutSeconds <= 0 {
+			e.cfg.TimeoutSeconds = 3
+		}
+		cfgSnapshot := e.cfg
 		e.cancels = make([]context.CancelFunc, 0, len(e.targets))
 		for _, target := range e.targets {
 			workerCtx, cancel := context.WithCancel(e.ctx)
 			e.cancels = append(e.cancels, cancel)
 			e.workerWg.Add(1)
-			go e.runTargetWorker(workerCtx, target)
+			go e.runTargetWorker(workerCtx, cfgSnapshot, target)
 		}
 	}
 }
 
-func (e *Engine) runTargetWorker(ctx context.Context, target config.Target) {
+func (e *Engine) runTargetWorker(ctx context.Context, cfg config.ProbeConfig, target config.Target) {
 	defer e.workerWg.Done()
 
-	ticker := time.NewTicker(time.Duration(e.cfg.IntervalSeconds) * time.Second)
+	ticker := time.NewTicker(time.Duration(cfg.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
 	log.Printf("[Probe] Worker started for %s (%s)", target.Name, target.Host)
 
-	e.executePing(ctx, target)
+	e.executePing(ctx, cfg, target)
 
 	for {
 		select {
@@ -101,43 +127,70 @@ func (e *Engine) runTargetWorker(ctx context.Context, target config.Target) {
 			log.Printf("[Probe] Worker stopping for %s", target.Name)
 			return
 		case <-ticker.C:
-			e.executePing(ctx, target)
+			e.executePing(ctx, cfg, target)
 		}
 	}
 }
 
-func (e *Engine) executePing(ctx context.Context, target config.Target) {
-	pinger, err := probing.NewPinger(target.Host)
-	if err != nil {
-		log.Printf("[Probe] [%s] Failed to resolve target host: %v", target.Name, err)
-		return
-	}
-
-	pinger.SetPrivileged(true)
-	pinger.Count = e.cfg.PacketCount
-	pinger.Timeout = time.Duration(e.cfg.TimeoutSeconds) * time.Second
-
-	err = pinger.RunWithContext(ctx)
+func (e *Engine) executePing(ctx context.Context, cfg config.ProbeConfig, target config.Target) {
 	if ctx.Err() != nil {
 		return
 	}
+
+	var sample storage.PingSample
+	pinger, err := probing.NewPinger(target.Host)
 	if err != nil {
-		log.Printf("[Probe] [%s] Ping execution error: %v", target.Name, err)
-		return
+		log.Printf("[Probe] [%s] Failed to resolve target host (%v); recording 100%% packet loss", target.Name, err)
+		sample = storage.PingSample{
+			Target:     target.Host,
+			Category:   target.Category,
+			RttMs:      0,
+			JitterMs:   0,
+			PacketLoss: 100.0,
+			Timestamp:  time.Now(),
+		}
+	} else {
+		pinger.SetPrivileged(true)
+		pinger.Count = cfg.PacketCount
+		pinger.Timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
+
+		err = pinger.RunWithContext(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			log.Printf("[Probe] [%s] Ping execution error (%v); recording 100%% packet loss", target.Name, err)
+			sample = storage.PingSample{
+				Target:     target.Host,
+				Category:   target.Category,
+				RttMs:      0,
+				JitterMs:   0,
+				PacketLoss: 100.0,
+				Timestamp:  time.Now(),
+			}
+		} else {
+			stats := pinger.Statistics()
+			rttMs := float64(stats.AvgRtt.Microseconds()) / 1000.0
+			jitterMs := float64(stats.StdDevRtt.Microseconds()) / 1000.0
+
+			sample = storage.PingSample{
+				Target:     target.Host,
+				Category:   target.Category,
+				RttMs:      rttMs,
+				JitterMs:   jitterMs,
+				PacketLoss: stats.PacketLoss,
+				Timestamp:  time.Now(),
+			}
+		}
 	}
 
-	stats := pinger.Statistics()
-	rttMs := float64(stats.AvgRtt.Microseconds()) / 1000.0
+	log.Printf("[Probe] %-16s (%-15s) | Avg RTT: %6.2fms | Jitter: %5.2fms | Loss: %5.1f%%",
+		target.Name, target.Host, sample.RttMs, sample.JitterMs, sample.PacketLoss)
 
-	sample := storage.PingSample{
-		Target:     target.Host,
-		Category:   target.Category,
-		RttMs:      rttMs,
-		PacketLoss: stats.PacketLoss,
-		Timestamp:  time.Now(),
+	// Evaluate SLA state immediately so disk I/O backpressure cannot delay outage detection
+	if e.outageTracker != nil {
+		e.outageTracker.RecordPing(sample)
 	}
-
-	log.Printf("[Probe] %-16s (%-15s) | Avg RTT: %6.2fms | Loss: %5.1f%%", target.Name, target.Host, sample.RttMs, sample.PacketLoss)
 
 	select {
 	case e.sampleChan <- sample:
@@ -146,11 +199,12 @@ func (e *Engine) executePing(ctx context.Context, target config.Target) {
 	}
 
 	if target.Category != "LAN" && e.traceEngine != nil {
-		if sample.PacketLoss >= e.cfg.LossThresholdPct {
-			reason := fmt.Sprintf("Packet loss %.1f%% >= threshold %.1f%%", sample.PacketLoss, e.cfg.LossThresholdPct)
+		if sample.PacketLoss >= cfg.LossThresholdPct {
+			reason := fmt.Sprintf("Packet loss %.1f%% >= threshold %.1f%%", sample.PacketLoss, cfg.LossThresholdPct)
 			e.traceEngine.Trigger(target.Host, reason)
-		} else if e.cfg.JitterThresholdMs > 0 && sample.RttMs >= e.cfg.JitterThresholdMs {
-			reason := fmt.Sprintf("RTT %.2fms >= threshold %.2fms", sample.RttMs, e.cfg.JitterThresholdMs)
+		} else if cfg.JitterThresholdMs > 0 && (sample.JitterMs >= cfg.JitterThresholdMs || sample.RttMs >= cfg.JitterThresholdMs) {
+			reason := fmt.Sprintf("Latency/Jitter (RTT %.2fms, Jitter %.2fms) >= threshold %.2fms",
+				sample.RttMs, sample.JitterMs, cfg.JitterThresholdMs)
 			e.traceEngine.Trigger(target.Host, reason)
 		}
 	}

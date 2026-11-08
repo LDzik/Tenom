@@ -77,7 +77,6 @@ func main() {
 				if err := db.InsertPingSample(sample); err != nil {
 					log.Printf("[Storage] Failed to persist ping sample: %v", err)
 				}
-				outageTracker.RecordPing(sample)
 			case sample, ok := <-dnsChan:
 				if !ok {
 					dnsChan = nil
@@ -104,7 +103,7 @@ func main() {
 	// Diagnostic engines
 	traceEngine := traceroute.NewEngine(ctx, &producerWg, 3*time.Minute, incidentChan)
 
-	probeEngine := probe.NewEngine(cfg.Probe, cfg.Targets, pingChan, traceEngine)
+	probeEngine := probe.NewEngine(cfg.Probe, cfg.Targets, pingChan, traceEngine, outageTracker)
 	probeEngine.Start(ctx, &producerWg)
 
 	dnsEngine := probe.NewDNSEngine(cfg.DNS, dnsChan)

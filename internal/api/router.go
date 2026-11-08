@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,6 +18,10 @@ import (
 
 type TargetReloader interface {
 	ReloadTargets(newTargets []config.Target)
+}
+
+type ProbeConfigReloader interface {
+	ReloadProbe(newCfg config.ProbeConfig, newTargets []config.Target)
 }
 
 type Server struct {
@@ -159,7 +162,7 @@ func (s *Server) handlePingMetrics(w http.ResponseWriter, r *http.Request) {
 	renderJSON(w, http.StatusOK, points)
 }
 
-// GET /api/v1/metrics/dns?range=1h|24h -> DNS latency time-series.
+// GET /api/v1/metrics/dns?range=1h|24h|7d -> DNS latency time-series.
 func (s *Server) handleDNSMetrics(w http.ResponseWriter, r *http.Request) {
 	timeRange := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("range")))
 	if timeRange == "" {
@@ -167,10 +170,10 @@ func (s *Server) handleDNSMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch timeRange {
-	case "1h", "24h":
+	case "1h", "24h", "7d":
 		// valid
 	default:
-		renderError(w, http.StatusBadRequest, "Invalid range parameter. Valid values: 1h, 24h")
+		renderError(w, http.StatusBadRequest, "Invalid range parameter. Valid values: 1h, 24h, 7d")
 		return
 	}
 
@@ -208,18 +211,21 @@ func (s *Server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/config -> Active configuration JSON.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	s.cfgMu.RLock()
-	defer s.cfgMu.RUnlock()
+	cfgSnapshot := s.cfg.Clone()
+	s.cfgMu.RUnlock()
 
-	if s.cfg == nil {
+	if cfgSnapshot == nil {
 		renderError(w, http.StatusNotFound, "Configuration is uninitialized")
 		return
 	}
 
-	renderJSON(w, http.StatusOK, s.cfg)
+	renderJSON(w, http.StatusOK, cfgSnapshot)
 }
 
 // PUT /api/v1/config -> Updates running config in-memory and persists to disk.
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB max body size
+
 	var updated config.Config
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&updated); err != nil {
@@ -227,73 +233,23 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(updated.Targets) == 0 {
-		renderError(w, http.StatusBadRequest, "Configuration validation failed: at least one target must be defined")
+	if err := updated.SanitizeAndValidate(); err != nil {
+		renderError(w, http.StatusBadRequest, "Configuration validation failed: "+err.Error())
 		return
 	}
 
-	for i, t := range updated.Targets {
-		if err := config.ValidateHost(t.Host); err != nil {
-			renderError(w, http.StatusBadRequest, fmt.Sprintf("Target #%d %v", i+1, err))
-			return
-		}
-		if strings.TrimSpace(t.Name) == "" {
-			updated.Targets[i].Name = t.Host
-		}
-		if strings.TrimSpace(t.Category) == "" {
-			updated.Targets[i].Category = "WAN"
-		}
-	}
-
-	if updated.Probe.IntervalSeconds <= 0 {
-		updated.Probe.IntervalSeconds = 15
-	}
-	if updated.Probe.PacketCount <= 0 {
-		updated.Probe.PacketCount = 3
-	}
-	if updated.Probe.TimeoutSeconds <= 0 {
-		updated.Probe.TimeoutSeconds = 3
-	}
-	if updated.Probe.JitterThresholdMs <= 0 {
-		updated.Probe.JitterThresholdMs = 120.0
-	}
-	if updated.Probe.LossThresholdPct <= 0 {
-		updated.Probe.LossThresholdPct = 10.0
-	}
-
-	if updated.DNS.Enabled {
-		if updated.DNS.IntervalSeconds <= 0 {
-			updated.DNS.IntervalSeconds = 30
-		}
-		if updated.DNS.TimeoutSeconds <= 0 {
-			updated.DNS.TimeoutSeconds = 3
-		}
-		if strings.TrimSpace(updated.DNS.Domain) == "" {
-			updated.DNS.Domain = "google.com"
-		}
-		for i, srv := range updated.DNS.Servers {
-			if strings.TrimSpace(srv.Host) == "" {
-				renderError(w, http.StatusBadRequest, fmt.Sprintf("DNS server #%d host cannot be empty", i+1))
-				return
-			}
-			if strings.TrimSpace(srv.Name) == "" {
-				updated.DNS.Servers[i].Name = srv.Host
-			}
-		}
-	}
-
-	s.cfgMu.Lock()
-	defer s.cfgMu.Unlock()
-
-	if updated.Server.Port == 0 && s.cfg != nil {
+	s.cfgMu.RLock()
+	if s.cfg != nil {
+		// Prevent HTTP clients from mutating listening port or filesystem database path
 		updated.Server.Port = s.cfg.Server.Port
-	}
-	if updated.Database.Path == "" && s.cfg != nil {
 		updated.Database.Path = s.cfg.Database.Path
-		updated.Database.RetentionDays = s.cfg.Database.RetentionDays
+		if updated.Database.RetentionDays <= 0 {
+			updated.Database.RetentionDays = s.cfg.Database.RetentionDays
+		}
 	}
-
 	configPath := s.configPath
+	s.cfgMu.RUnlock()
+
 	if configPath == "" {
 		configPath = "config.json"
 	}
@@ -303,14 +259,17 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.cfg == nil {
-		s.cfg = &updated
-	} else {
-		*s.cfg = updated
-	}
+	s.cfgMu.Lock()
+	s.cfg = updated.Clone()
+	s.cfgMu.Unlock()
 
 	for _, rldr := range s.reloaders {
-		if rldr != nil {
+		if rldr == nil {
+			continue
+		}
+		if pr, ok := rldr.(ProbeConfigReloader); ok {
+			pr.ReloadProbe(updated.Probe, updated.Targets)
+		} else {
 			rldr.ReloadTargets(updated.Targets)
 		}
 	}

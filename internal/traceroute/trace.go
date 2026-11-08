@@ -18,6 +18,7 @@ type Engine struct {
 	wg               *sync.WaitGroup
 	cooldownDuration time.Duration
 	incidentChan     chan<- storage.Incident
+	sem              chan struct{}
 	mu               sync.Mutex
 	lastTriggered    map[string]time.Time
 }
@@ -31,6 +32,7 @@ func NewEngine(rootCtx context.Context, wg *sync.WaitGroup, cooldown time.Durati
 		wg:               wg,
 		cooldownDuration: cooldown,
 		incidentChan:     incidentChan,
+		sem:              make(chan struct{}, 3),
 		lastTriggered:    make(map[string]time.Time),
 	}
 }
@@ -40,13 +42,19 @@ func (e *Engine) Trigger(targetHost string, reason string) {
 		return
 	}
 
+	now := time.Now()
 	e.mu.Lock()
+	for host, ts := range e.lastTriggered {
+		if now.Sub(ts) >= e.cooldownDuration*2 {
+			delete(e.lastTriggered, host)
+		}
+	}
 	lastTime, exists := e.lastTriggered[targetHost]
-	if exists && time.Since(lastTime) < e.cooldownDuration {
+	if exists && now.Sub(lastTime) < e.cooldownDuration {
 		e.mu.Unlock()
 		return
 	}
-	e.lastTriggered[targetHost] = time.Now()
+	e.lastTriggered[targetHost] = now
 	e.mu.Unlock()
 
 	log.Printf("[Diagnostic] ANOMALY DETECTED on %s (%s). Launching traceroute...", targetHost, reason)
@@ -60,6 +68,14 @@ func (e *Engine) Trigger(targetHost string, reason string) {
 func (e *Engine) executeTrace(targetHost string, reason string) {
 	if e.wg != nil {
 		defer e.wg.Done()
+	}
+
+	// Acquire concurrency semaphore (max 3 simultaneous OS traceroute subprocesses)
+	select {
+	case e.sem <- struct{}{}:
+		defer func() { <-e.sem }()
+	case <-e.rootCtx.Done():
+		return
 	}
 	startTime := time.Now()
 

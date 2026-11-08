@@ -7,6 +7,7 @@ type PingSample struct {
 	Target     string    `json:"target"`
 	Category   string    `json:"category"`
 	RttMs      float64   `json:"rtt_ms"`
+	JitterMs   float64   `json:"jitter_ms,omitempty"`
 	PacketLoss float64   `json:"packet_loss"`
 	Timestamp  time.Time `json:"timestamp"`
 }

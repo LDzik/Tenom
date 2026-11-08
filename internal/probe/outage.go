@@ -61,8 +61,18 @@ func NewOutageTracker(cfg config.ProbeConfig, targets []config.Target, store Out
 
 func (o *OutageTracker) ReloadTargets(newTargets []config.Target) {
 	o.mu.Lock()
+	cfg := o.cfg
+	o.mu.Unlock()
+	o.ReloadProbe(cfg, newTargets)
+}
+
+func (o *OutageTracker) ReloadProbe(newCfg config.ProbeConfig, newTargets []config.Target) {
+	o.mu.Lock()
 	defer o.mu.Unlock()
 
+	if newCfg.LossThresholdPct > 0 || newCfg.JitterThresholdMs > 0 {
+		o.cfg = newCfg
+	}
 	targetMap := make(map[string]config.Target, len(newTargets))
 	for _, t := range newTargets {
 		targetMap[t.Host] = t
@@ -112,14 +122,14 @@ func (o *OutageTracker) evaluateState() (NetworkState, string) {
 			lanCount++
 			if sample.PacketLoss >= 100.0 {
 				lanDownCount++
-			} else if sample.PacketLoss >= lossThreshold || (jitterThreshold > 0 && sample.RttMs >= jitterThreshold) || sample.PacketLoss > 0 {
+			} else if sample.PacketLoss >= lossThreshold || (jitterThreshold > 0 && (sample.RttMs >= jitterThreshold || sample.JitterMs >= jitterThreshold)) || sample.PacketLoss > 0 {
 				hasDegraded = true
 			}
 		} else {
 			wanCount++
 			if sample.PacketLoss >= 100.0 {
 				wanDownCount++
-			} else if sample.PacketLoss >= lossThreshold || (jitterThreshold > 0 && sample.RttMs >= jitterThreshold) {
+			} else if sample.PacketLoss >= lossThreshold || (jitterThreshold > 0 && (sample.RttMs >= jitterThreshold || sample.JitterMs >= jitterThreshold)) {
 				hasDegraded = true
 			}
 		}
