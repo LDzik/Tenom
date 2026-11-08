@@ -107,10 +107,8 @@
 
     <!-- Main Dashboard Container -->
     <main class="dashboard-content">
-      <!-- Tab 1: Overview & Metrics -->
-      <div id="tab-pane-overview" class="main-tab-pane active" role="tabpanel">
-        <!-- Outage Banner (shown when outage is active) -->
-        <section id="outage-alert-banner" class="outage-banner hidden">
+      <!-- Outage Banner (Global across all dashboard tabs) -->
+      <section id="outage-alert-banner" class="outage-banner hidden">
         <div class="outage-banner-content">
           <div class="outage-pulse-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -124,14 +122,19 @@
             <p class="outage-desc">Automatic traceroute diagnostics triggered. Multiple probe targets unreachable.</p>
           </div>
           <div class="outage-timer">
-            <span class="timer-label">Outage Duration:</span>
+            <span class="timer-label">Duration:</span>
             <span id="outage-duration-counter" class="timer-value mono">0s</span>
+            <button id="btn-outage-view-incidents" class="btn-secondary" style="margin-left: 1rem; padding: 0.35rem 0.75rem; font-size: 0.75rem;">
+              View Diagnostics &rarr;
+            </button>
           </div>
         </div>
       </section>
 
-      <!-- KPI Overview Cards Grid -->
-      <section class="overview-grid">
+      <!-- Tab 1: Overview & Metrics -->
+      <div id="tab-pane-overview" class="main-tab-pane active" role="tabpanel">
+        <!-- KPI Overview Cards Grid -->
+        <section class="overview-grid">
         <!-- Card 1: System Status -->
         <div class="kpi-card card-status">
           <div class="kpi-header">
@@ -359,7 +362,7 @@
             <div class="incidents-panel-header">
               <div class="incidents-title-group">
                 <div class="title-with-dot">
-                  <span class="panel-dot incident-dot"></span>
+                  <span class="panel-dot incident-dot dot-healthy"></span>
                   <h3 class="panel-title">Incident &amp; Outage Diagnostic Log</h3>
                 </div>
                 <p class="panel-description">Automated traceroute snapshots and SLA outage logs triggered during connectivity degradation</p>
@@ -457,6 +460,7 @@
               </svg>
               <span id="copy-btn-text">Copy</span>
             </button>
+            <button id="btn-modal-close-x" class="btn-terminal-close" title="Close (Esc)" aria-label="Close modal">✕</button>
           </div>
         </div>
 

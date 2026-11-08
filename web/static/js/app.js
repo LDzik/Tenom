@@ -216,8 +216,12 @@
   }
 
   function handleChartsResize() {
-    if (state.pingChart) state.pingChart.resize();
-    if (state.dnsChart) state.dnsChart.resize();
+    if (state.pingChart && DOM.chartPingEl && DOM.chartPingEl.clientWidth > 0) {
+      state.pingChart.resize();
+    }
+    if (state.dnsChart && DOM.chartDnsEl && DOM.chartDnsEl.clientWidth > 0) {
+      state.dnsChart.resize();
+    }
   }
 
   function getEmptyChartOption(message) {
@@ -334,10 +338,20 @@
 
     // Modal Close
     if (DOM.btnModalClose) DOM.btnModalClose.addEventListener('click', closeModal);
+    const btnModalCloseX = document.getElementById('btn-modal-close-x');
+    if (btnModalCloseX) {
+      btnModalCloseX.addEventListener('click', closeModal);
+    }
     if (DOM.tracerouteModal) {
       DOM.tracerouteModal.addEventListener('click', (e) => {
         if (e.target === DOM.tracerouteModal) closeModal();
       });
+    }
+
+    // Outage CTA Button
+    const outageCta = document.getElementById('btn-outage-view-incidents');
+    if (outageCta) {
+      outageCta.addEventListener('click', () => handleMainTabSwitch('incidents'));
     }
 
     // Modal Copy to Clipboard
@@ -916,8 +930,8 @@
           yAxisIndex: viewMetric === 'both' ? 1 : 0,
           step: 'middle',
           showSymbol: false,
-          lineStyle: { width: 1.5, type: 'dashed', color: '#ef4444' },
-          itemStyle: { color: '#ef4444' },
+          lineStyle: { width: 1.8, type: 'dashed', color: color }, // Use target color with dashed line
+          itemStyle: { color: color },
           data: lossData
         });
       }
@@ -928,6 +942,7 @@
       animationDuration: 350,
       tooltip: {
         trigger: 'axis',
+        confine: true, // Prevent tooltip clipping on viewport edges
         backgroundColor: 'rgba(24, 24, 27, 0.96)',
         borderColor: '#3f3f46',
         borderWidth: 1,
@@ -936,7 +951,9 @@
         extraCssText: 'box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.7); backdrop-filter: blur(8px); border-radius: 8px;',
         formatter: function (params) {
           if (!params || params.length === 0) return '';
-          let header = `<div style="font-weight:600; color:#fafafa; margin-bottom:6px; font-family:Inter, sans-serif; border-bottom:1px solid #3f3f46; padding-bottom:4px;">${params[0].axisValueLabel}</div>`;
+          const rawTime = params[0].axisValue || params[0].name || params[0].axisValueLabel;
+          const formattedTime = formatTooltipHeader(rawTime);
+          let header = `<div style="font-weight:600; color:#fafafa; margin-bottom:6px; font-family:JetBrains Mono, monospace; border-bottom:1px solid #3f3f46; padding-bottom:4px;">${escapeHTML(formattedTime)}</div>`;
           let rows = params.map(p => {
             const isLossSeries = p.seriesName.includes('Loss');
             const unit = isLossSeries ? '%' : 'ms';
@@ -961,7 +978,8 @@
       legend: {
         type: 'scroll',
         orient: 'horizontal',
-        top: 10,
+        top: 8,
+        padding: [0, 80], // Prevent legend pager collision with right y-axis title
         pageIconColor: '#a1a1aa',
         pageTextStyle: { color: '#a1a1aa' },
         textStyle: { color: '#a1a1aa', fontSize: 11, fontFamily: 'Inter' },
@@ -971,9 +989,9 @@
       // Explicit grid requirement
       grid: {
         top: 60,
-        bottom: 50,
+        bottom: 55,
         left: 55,
-        right: 25,
+        right: viewMetric === 'both' ? 55 : 25, // Ample breathing room for percentage labels
         containLabel: false
       },
       xAxis: {
@@ -983,9 +1001,14 @@
         axisLine: { lineStyle: { color: '#27272a' } },
         axisLabel: {
           color: '#71717a',
-          fontSize: 11,
+          fontSize: 10,
           fontFamily: 'JetBrains Mono',
-          formatter: formatChartXAxisLabel
+          hideOverlap: true,
+          interval: 'auto',
+          margin: 10,
+          formatter: function (val) {
+            return formatChartXAxisLabel(val, state.pingRange);
+          }
         }
       },
       yAxis: yAxisConfig,
@@ -1004,7 +1027,10 @@
             borderColor: '#06b6d4'
           },
           textStyle: { color: '#71717a', fontSize: 10, fontFamily: 'JetBrains Mono' },
-          brushSelect: false
+          brushSelect: false,
+          labelFormatter: function (value, valueStr) {
+            return formatChartXAxisLabel(valueStr, state.pingRange);
+          }
         },
         {
           type: 'inside',
@@ -1021,7 +1047,7 @@
     if (!raw) return null;
 
     if (raw.timestamps && raw.series) {
-      const timestamps = raw.timestamps.map(formatTimestampLabel);
+      const timestamps = raw.timestamps;
       const seriesList = [];
       const lossList = [];
 
@@ -1057,7 +1083,7 @@
       const lossData = [];
 
       raw.forEach(pt => {
-        timestamps.push(formatTimestampLabel(pt.timestamp));
+        timestamps.push(formatTimestampKey(pt.timestamp));
         rttData.push(pt.avg_rtt ?? pt.rtt_ms ?? 0);
         lossData.push(pt.packet_loss ?? 0);
       });
@@ -1122,6 +1148,7 @@
         tooltip: {
           trigger: 'axis',
           axisPointer: { type: 'shadow' },
+          confine: true, // Prevent tooltip clipping on viewport edges
           backgroundColor: 'rgba(24, 24, 27, 0.96)',
           borderColor: '#3f3f46',
           textStyle: { color: '#f4f4f5', fontFamily: 'JetBrains Mono', fontSize: 12 },
@@ -1138,7 +1165,12 @@
           type: 'category',
           data: servers,
           axisLine: { lineStyle: { color: '#27272a' } },
-          axisLabel: { color: '#a1a1aa', fontSize: 11, fontFamily: 'Inter' }
+          axisLabel: {
+            color: '#a1a1aa',
+            fontSize: 11,
+            fontFamily: 'Inter',
+            interval: 0 // Prevent ECharts from auto-hiding alternating nameserver labels
+          }
         },
         yAxis: {
           type: 'value',
@@ -1176,12 +1208,15 @@
       animationDuration: 350,
       tooltip: {
         trigger: 'axis',
+        confine: true, // Prevent tooltip clipping on viewport edges
         backgroundColor: 'rgba(24, 24, 27, 0.96)',
         borderColor: '#3f3f46',
         textStyle: { color: '#f4f4f5', fontFamily: 'JetBrains Mono', fontSize: 12 },
         formatter: function (params) {
           if (!params || params.length === 0) return '';
-          let header = `<div style="font-weight:600; color:#fafafa; margin-bottom:6px; font-family:Inter; border-bottom:1px solid #3f3f46; padding-bottom:4px;">${params[0].axisValueLabel}</div>`;
+          const rawTime = params[0].axisValue || params[0].name || params[0].axisValueLabel;
+          const formattedTime = formatTooltipHeader(rawTime);
+          let header = `<div style="font-weight:600; color:#fafafa; margin-bottom:6px; font-family:JetBrains Mono, monospace; border-bottom:1px solid #3f3f46; padding-bottom:4px;">${escapeHTML(formattedTime)}</div>`;
           let rows = params.map(p => `
             <div style="display:flex; justify-content:space-between; gap:1.5rem; margin-top:3px;">
               <span style="color:#a1a1aa;">${escapeHTML(p.seriesName)}:</span>
@@ -1215,9 +1250,14 @@
         axisLine: { lineStyle: { color: '#27272a' } },
         axisLabel: {
           color: '#71717a',
-          fontSize: 11,
+          fontSize: 10,
           fontFamily: 'JetBrains Mono',
-          formatter: formatChartXAxisLabel
+          hideOverlap: true,
+          interval: 'auto',
+          margin: 10,
+          formatter: function (val) {
+            return formatChartXAxisLabel(val, state.dnsRange);
+          }
         }
       },
       yAxis: {
@@ -1249,7 +1289,7 @@
     if (!raw) return null;
 
     if (raw.timestamps && raw.series) {
-      const timestamps = raw.timestamps.map(formatTimestampLabel);
+      const timestamps = raw.timestamps;
       const servers = Object.keys(raw.series);
       const serverAverages = {};
       const timelineSeries = [];
@@ -1280,7 +1320,6 @@
       });
 
       const sortedTimestamps = Array.from(timeSet).sort();
-      const formattedTimestamps = sortedTimestamps.map(formatTimestampLabel);
       const servers = Object.keys(serverMap);
       const serverAverages = {};
       const timelineSeries = [];
@@ -1303,10 +1342,22 @@
         timelineSeries.push({ server: srv, data });
       });
 
-      return { servers, serverAverages, timestamps: formattedTimestamps, timelineSeries };
+      return { servers, serverAverages, timestamps: sortedTimestamps, timelineSeries };
     }
 
     return null;
+  }
+
+  function updateIncidentIndicatorDot(count) {
+    const dot = document.querySelector('.panel-dot.incident-dot');
+    if (!dot) return;
+    if (count > 0) {
+      dot.classList.remove('dot-healthy');
+      dot.classList.add('dot-active');
+    } else {
+      dot.classList.remove('dot-active');
+      dot.classList.add('dot-healthy');
+    }
   }
 
   /**
@@ -1314,6 +1365,8 @@
    */
   function renderIncidentsTable(incidents) {
     if (!DOM.incidentsTbody) return;
+
+    updateIncidentIndicatorDot(incidents ? incidents.length : 0);
 
     DOM.incidentBadgeCount.textContent = `${incidents.length} Event${incidents.length === 1 ? '' : 's'}`;
     const tabIncidentsCount = document.getElementById('tab-incidents-count');
@@ -1833,19 +1886,62 @@
     return isNaN(d.getTime()) ? isoString : d.toISOString();
   }
 
-  function formatTimestampLabel(isoString) {
-    if (!isoString) return '';
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return isoString;
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  function formatTooltipHeader(rawTime) {
+    if (!rawTime) return '--';
+    const d = new Date(rawTime);
+    if (isNaN(d.getTime())) return String(rawTime);
+
+    const pad = n => String(n).padStart(2, '0');
+    const year = d.getFullYear();
+    const month = pad(d.getMonth() + 1);
+    const day = pad(d.getDate());
+    const hours = pad(d.getHours());
+    const minutes = pad(d.getMinutes());
+    const seconds = pad(d.getSeconds());
+
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   }
 
-  function formatChartXAxisLabel(val) {
-    if (!val) return '';
-    if (val.length >= 5 && val.includes(':')) {
-      return val.substring(0, 5);
+  function isRangeMultiDay(range) {
+    if (!range) return false;
+    const r = String(range).toLowerCase().trim();
+    if (r === '24h' || r === '7d' || r === '30d' || r === '1w' || r === '1m') return true;
+    if (r.endsWith('d') || r.endsWith('w') || r.endsWith('m')) return true;
+    if (r.endsWith('h')) {
+      const num = parseInt(r, 10);
+      return !isNaN(num) && num >= 24;
     }
-    return val;
+    return false;
+  }
+
+  function formatTimestampLabel(isoString, range) {
+    return formatChartXAxisLabel(isoString, range);
+  }
+
+  function formatChartXAxisLabel(val, range) {
+    if (!val) return '';
+    const d = new Date(val);
+    if (isNaN(d.getTime())) {
+      if (val.length >= 5 && val.includes(':')) {
+        return val.substring(0, 5);
+      }
+      return String(val);
+    }
+
+    const pad = n => String(n).padStart(2, '0');
+    const hours = pad(d.getHours());
+    const minutes = pad(d.getMinutes());
+
+    const isMultiDay = isRangeMultiDay(range ?? state.pingRange);
+
+    if (isMultiDay) {
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const month = monthNames[d.getMonth()];
+      const day = d.getDate();
+      return `${month} ${day}, ${hours}:${minutes}`;
+    }
+
+    return `${hours}:${minutes}`;
   }
 
   function getRelativeTime(isoString) {

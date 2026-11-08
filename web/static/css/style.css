@@ -21,7 +21,7 @@
   /* Typography */
   --text-primary: #f4f4f5;
   --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
+  --text-muted: #94a3b8;
   --text-inverse: #09090b;
 
   /* Status Colors */
@@ -61,6 +61,17 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle) var(--bg-app);
+}
+
+/* Accessible focus ring for keyboard navigation */
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+.main-tab-btn:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
 }
 
 html, body {
@@ -571,8 +582,14 @@ html, body {
 
 .overview-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 1.25rem;
+}
+
+@media (min-width: 1200px) {
+  .overview-grid {
+    grid-template-columns: repeat(5, 1fr);
+  }
 }
 
 .kpi-card {
@@ -651,6 +668,15 @@ html, body {
   letter-spacing: -0.02em;
   color: var(--text-primary);
   line-height: 1.1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.kpi-value-row .badge-pill {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kpi-unit {
@@ -934,6 +960,14 @@ html, body {
 .ping-dot { background-color: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan); }
 .dns-dot { background-color: var(--accent-amber); box-shadow: 0 0 8px var(--accent-amber); }
 .incident-dot { background-color: var(--color-red); box-shadow: 0 0 8px var(--color-red); }
+.panel-dot.incident-dot.dot-healthy {
+  background-color: var(--accent-emerald);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+}
+.panel-dot.incident-dot.dot-active {
+  background-color: var(--accent-rose);
+  box-shadow: 0 0 8px rgba(244, 63, 94, 0.4);
+}
 
 .panel-title {
   font-size: 1rem;
@@ -1332,6 +1366,26 @@ html, body {
   color: #ffffff;
 }
 
+/* Explicit close 'X' button in terminal header */
+.btn-terminal-close {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #71717a;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  transition: all 0.15s ease;
+}
+
+.btn-terminal-close:hover {
+  color: #f4f4f5;
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-subtle);
+}
+
 .copy-icon {
   width: 12px;
   height: 12px;
@@ -1380,8 +1434,9 @@ html, body {
   font-size: 0.82rem;
   line-height: 1.6;
   color: #a1a1aa;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
+  word-break: normal;
+  overflow-x: auto;
 }
 
 /* Terminal syntax highlighting spans */
@@ -1804,7 +1859,7 @@ input:checked + .slider:before {
 
 .toast-container {
   position: fixed;
-  top: 24px;
+  top: 80px; /* Shift below the 65px header */
   right: 24px;
   z-index: 9999;
   display: flex;
